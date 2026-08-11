@@ -30,6 +30,7 @@ const authenticate = async (req, res, next) => {
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = req.body
+    // console.log('Login attempt:', { email, password }) // Debugging line
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' })
     }
