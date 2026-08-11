@@ -1,5 +1,5 @@
 import express from 'express'
-import { authenticate } from './auth.js'
+import { authenticate } from '../middleware/auth.js'
 import ActivityLog from '../models/ActivityLog.js'
 
 const router = express.Router()

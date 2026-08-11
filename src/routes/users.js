@@ -1,6 +1,6 @@
 import express from 'express'
 import User from '../models/User.js'
-import { authenticate } from './auth.js'
+import { authenticate } from '../middleware/auth.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -35,7 +35,17 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const payload = req.body
+    const payload = { ...req.body }
+
+    if (!payload.systemRole) {
+      if (payload.role === 'SUPER_ADMIN') payload.systemRole = 'SUPER_ADMIN'
+      else if (String(payload.role || '').startsWith('ADMIN')) payload.systemRole = 'ADMIN'
+      else payload.systemRole = 'USER'
+    }
+
+    if (payload.status === 'Active') payload.status = 'ACTIVE'
+    if (payload.status === 'Inactive') payload.status = 'INACTIVE'
+
     const user = new User(payload)
     await user.save()
     res.status(201).json(sanitizeUser(user))

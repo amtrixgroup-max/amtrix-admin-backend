@@ -1,5 +1,5 @@
 import express from 'express'
-import { authenticate } from './auth.js'
+import { authenticate } from '../middleware/auth.js'
 import Dashboard from '../models/Dashboard.js'
 
 const router = express.Router()
@@ -13,5 +13,10 @@ router.get('/', async (req, res, next) => {
     next(error)
   }
 })
+
+
+
+
+
 
 export default router

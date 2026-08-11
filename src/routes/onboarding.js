@@ -1,5 +1,5 @@
 import express from 'express'
-import { authenticate } from './auth.js'
+import { authenticate } from '../middleware/auth.js'
 import Onboarding from '../models/Onboarding.js'
 import Career from '../models/Career.js'
 import Customer from '../models/Customer.js'
