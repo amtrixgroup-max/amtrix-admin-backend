@@ -1,5 +1,6 @@
 import express from 'express'
 import User from '../models/User.js'
+import { isPasswordValid } from '../utils/passwordPolicy.js'
 import { authenticate } from '../middleware/auth.js'
 
 const router = express.Router()
@@ -46,6 +47,11 @@ router.post('/', async (req, res, next) => {
     if (payload.status === 'Active') payload.status = 'ACTIVE'
     if (payload.status === 'Inactive') payload.status = 'INACTIVE'
 
+    // Enforce password policy only when password is provided (don't block legacy users)
+    if (payload.password && !isPasswordValid(payload.password)) {
+      return res.status(400).json({ error: 'Password does not meet complexity requirements' })
+    }
+
     const user = new User(payload)
     await user.save()
     res.status(201).json(sanitizeUser(user))
@@ -60,6 +66,9 @@ router.put('/:id', async (req, res, next) => {
     const payload = { ...req.body }
     if (payload.password === '') {
       delete payload.password
+    }
+    if (payload.password && !isPasswordValid(payload.password)) {
+      return res.status(400).json({ error: 'Password does not meet complexity requirements' })
     }
     const user = await User.findOneAndUpdate({ id: req.params.id }, payload, { new: true, runValidators: true }).select('-password')
     if (!user) {

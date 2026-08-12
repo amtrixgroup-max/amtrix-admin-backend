@@ -13,17 +13,24 @@ export const authenticate = async (req, res, next) => {
     }
 
     const payload = jwt.verify(token, JWT_SECRET)
+
     const user = await User.findById(payload.userId).select('-password')
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid token' })
-    }
+    if (!user) return res.status(401).json({ error: 'Invalid token' })
 
     const status = String(user.status || '').toUpperCase()
     if (status && status !== 'ACTIVE') {
       return res.status(403).json({ error: 'Account is not active' })
     }
 
+    // Ensure token jti is present in user's activeSessions
+    const tokenJti = payload.jti || null
+    if (!tokenJti) return res.status(401).json({ error: 'Invalid session token' })
+
+    const found = (user.activeSessions || []).some((s) => s.jti === tokenJti)
+    if (!found) return res.status(401).json({ error: 'Session not active' })
+
     req.user = user
+    req.tokenPayload = payload
     next()
   } catch (error) {
     res.status(401).json({ error: 'Unauthorized' })

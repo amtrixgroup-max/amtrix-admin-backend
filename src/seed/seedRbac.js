@@ -6,14 +6,14 @@ import User from '../models/User.js'
 const DEPARTMENTS = [
   {
     name: 'AP',
-    displayName: 'AP Fridget',
+    displayName: 'AP Freight',
     code: 'AP',
     description: 'AP Department',
     status: 'ACTIVE'
   },
   {
     name: 'TK',
-    displayName: 'TK Fridget',
+    displayName: 'TK Freight',
     code: 'TK',
     description: 'TK Department',
     status: 'ACTIVE'

@@ -104,6 +104,35 @@ const userSchema = new mongoose.Schema(
       default: null
     },
 
+    failedLoginAttempts: {
+      type: Number,
+      default: 0
+    },
+
+    lockedUntil: {
+      type: Date,
+      default: null
+    },
+
+    // Active sessions stored as array of session objects { jti, ip, createdAt }
+    activeSessions: [
+      {
+        jti: String,
+        ip: String,
+        createdAt: { type: Date, default: () => new Date() }
+      }
+    ],
+
+    loginAttemptLogs: [
+      {
+        ip: String,
+        isListed: Boolean,
+        success: Boolean,
+        reason: String,
+        createdAt: { type: Date, default: () => new Date() }
+      }
+    ],
+
     createdAt: {
       type: Date,
       default: () => new Date()

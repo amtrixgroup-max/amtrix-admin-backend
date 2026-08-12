@@ -3,6 +3,7 @@ import Department from '../models/Department.js'
 import Role from '../models/Role.js'
 import Permission from '../models/Permission.js'
 import User from '../models/User.js'
+import { isPasswordValid } from '../utils/passwordPolicy.js'
 import { authenticate } from '../middleware/auth.js'
 import { requirePermission } from '../middleware/requirePermission.js'
 import { getEffectivePermissions } from '../utils/permissions.js'
@@ -194,6 +195,11 @@ router.post('/users', requirePermission('USER_CREATE'), async (req, res, next) =
       }
     }
 
+    // Enforce password policy only when password provided
+    if (req.body.password && !isPasswordValid(req.body.password)) {
+      return res.status(400).json({ success: false, message: 'Password does not meet complexity requirements' })
+    }
+
     const user = await User.create(req.body)
     const safe = user.toJSON()
     res.status(201).json({ success: true, data: safe })
@@ -207,6 +213,9 @@ router.put('/users/:id', requirePermission('USER_UPDATE'), async (req, res, next
     const payload = { ...req.body }
     if (payload.password === '') {
       delete payload.password
+    }
+    if (payload.password && !isPasswordValid(payload.password)) {
+      return res.status(400).json({ success: false, message: 'Password does not meet complexity requirements' })
     }
 
     if (!isSuperAdmin(req.user) && payload.systemRole === 'SUPER_ADMIN') {
