@@ -133,6 +133,12 @@ const userSchema = new mongoose.Schema(
       }
     ],
 
+    // Per-user whitelisted IPs for flexible work-from-home allowances
+    allowedIps: {
+      type: [String],
+      default: []
+    },
+
     createdAt: {
       type: Date,
       default: () => new Date()

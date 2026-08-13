@@ -5,6 +5,14 @@ import User from '../models/User.js'
 import { authenticate, JWT_SECRET } from '../middleware/auth.js'
 import { buildAuthUserPayload } from '../utils/permissions.js'
 import { isPasswordValid } from '../utils/passwordPolicy.js'
+import {
+  collectUserAllowedIps,
+  getClientIp,
+  isAdminLikeUser,
+  isIpAllowed,
+  parseListedIps,
+  shouldEnforceListedIp
+} from '../utils/ipAccess.js'
 
 const router = express.Router()
 
@@ -39,46 +47,22 @@ router.post('/login', async (req, res, next) => {
       })
     }
 
-    // Determine client IP and normalize IPv6-mapped IPv4 addresses
-    const normalizeIp = (ip) => {
-      if (!ip || typeof ip !== 'string') return ''
-      const trimmed = ip.trim()
-      if (trimmed.startsWith('::ffff:')) {
-        return trimmed.slice(7)
-      }
-      if (trimmed === '::1') return '127.0.0.1'
-      return trimmed
-    }
-
-    const getClientIp = (req) => {
-      const xf = req.headers['x-forwarded-for'] || ''
-      if (xf) {
-        const first = xf.split(',')[0].trim()
-        return normalizeIp(first)
-      }
-      return normalizeIp(req.ip || req.connection?.remoteAddress || '')
-    }
-
     const clientIp = getClientIp(req)
-
-    console.log('Login attempt:', {
-      email: userDoc.email,
-      clientIp,
-      listedIps: (process.env.LISTED_IPS || process.env.LISTED_IP || '').split(',').map((s) => s.trim()).filter(Boolean)
-    })
-
-    // Check listed IPs enforcement: env LISTED_IPS comma separated
-    const listedIpsEnv = process.env.LISTED_IPS || process.env.LISTED_IP || ''
-    const listedIps = listedIpsEnv
-      .split(',')
-      .map((s) => normalizeIp(s))
-      .filter(Boolean)
+    const listedIps = parseListedIps(process.env.LISTED_IPS || process.env.LISTED_IP || '')
     const enforceForAll = String(process.env.ENFORCE_LISTED_IP_FOR_ALL || 'false').toLowerCase() === 'true'
     // By default do NOT restrict admins/super-admins; set env var to 'true' to enable
     const restrictAdmins = String(process.env.ENFORCE_LISTED_IP_FOR_ADMINS || 'false').toLowerCase() === 'true'
 
-    const isListed = listedIps.length === 0 ? false : listedIps.includes(clientIp)
-    const isAdminLike = userDoc.systemRole === 'SUPER_ADMIN' || userDoc.systemRole === 'ADMIN'
+    const userAllowedIps = collectUserAllowedIps(userDoc)
+    const isListed = isIpAllowed({ clientIp, listedIps, userAllowedIps })
+    const isAdminLike = isAdminLikeUser(userDoc)
+
+    console.log('Login attempt:', {
+      email: userDoc.email,
+      clientIp,
+      listedIps,
+      userAllowedIps
+    })
 
     if (userDoc.password !== password) {
       const maxAttempts = Number(process.env.MAX_LOGIN_ATTEMPTS || 3)
@@ -117,13 +101,15 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid email or password', attemptsRemaining: remaining })
     }
 
-    const shouldEnforceIp =
-      listedIps.length > 0 &&
-      (!isAdminLike || enforceForAll || restrictAdmins)
+    const shouldEnforceIp = shouldEnforceListedIp({
+      isAdminLike,
+      listedIpsCount: listedIps.length,
+      enforceForAll,
+      restrictAdmins
+    })
 
     if (shouldEnforceIp && !isListed) {
-      // Suspend normal users for login from unlisted IPs; admin access remains unrestricted by default
-      userDoc.status = 'SUSPENDED'
+      // Reject only — do not suspend. Admins can whitelist a home IP and the user can retry.
       userDoc.loginAttemptLogs = userDoc.loginAttemptLogs || []
       userDoc.loginAttemptLogs.push({
         ip: clientIp,
@@ -132,7 +118,9 @@ router.post('/login', async (req, res, next) => {
         reason: 'IP not listed'
       })
       await userDoc.save()
-      return res.status(403).json({ error: 'Login from this IP is not allowed; account suspended' })
+      return res.status(403).json({
+        error: 'Login from this IP is not allowed. Contact your Admin to whitelist this address.'
+      })
     }
 
     // Prevent concurrent sessions: allow only one active session per user

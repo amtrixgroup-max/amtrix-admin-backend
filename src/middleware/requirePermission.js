@@ -56,10 +56,6 @@ export const requirePermission = (permissionName) => {
 export const requireUserScope = (paramName = 'id') => {
   return async (req, res, next) => {
     try {
-      if (req.user?.systemRole === 'SUPER_ADMIN' || req.permissionScope === 'ALL') {
-        return next()
-      }
-
       const rawId = req.params[paramName]
       let targetUser = null
 
@@ -67,7 +63,7 @@ export const requireUserScope = (paramName = 'id') => {
         targetUser = await User.findById(rawId).select('-password')
       }
 
-      if (!targetUser && !Number.isNaN(Number(rawId))) {
+      if (!targetUser && rawId !== '' && rawId != null && !Number.isNaN(Number(rawId))) {
         targetUser = await User.findOne({ id: Number(rawId) }).select('-password')
       }
 
@@ -76,6 +72,12 @@ export const requireUserScope = (paramName = 'id') => {
           success: false,
           message: 'Target user not found'
         })
+      }
+
+      req.targetUser = targetUser
+
+      if (req.user?.systemRole === 'SUPER_ADMIN' || req.permissionScope === 'ALL') {
+        return next()
       }
 
       const allowed = await isTargetInScope({
@@ -91,7 +93,6 @@ export const requireUserScope = (paramName = 'id') => {
         })
       }
 
-      req.targetUser = targetUser
       next()
     } catch (error) {
       return res.status(500).json({

@@ -5,8 +5,10 @@ import Permission from '../models/Permission.js'
 import User from '../models/User.js'
 import { isPasswordValid } from '../utils/passwordPolicy.js'
 import { authenticate } from '../middleware/auth.js'
-import { requirePermission } from '../middleware/requirePermission.js'
+import { requirePermission, requireUserScope } from '../middleware/requirePermission.js'
+import net from 'net'
 import { getEffectivePermissions } from '../utils/permissions.js'
+import { isAdminLikeUser, normalizeIp } from '../utils/ipAccess.js'
 
 const router = express.Router()
 
@@ -20,6 +22,16 @@ const requireSuperAdmin = (req, res, next) => {
     return res.status(403).json({
       success: false,
       message: 'Super Admin access required'
+    })
+  }
+  next()
+}
+
+const requireAdminLike = (req, res, next) => {
+  if (!isAdminLikeUser(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Admin or Super Admin access required'
     })
   }
   next()
@@ -243,6 +255,93 @@ router.put('/users/:id', requirePermission('USER_UPDATE'), async (req, res, next
     next(error)
   }
 })
+
+// ---------- Per-user whitelisted IPs (admin / super admin) ----------
+router.get(
+  '/users/:userId/allowed-ips',
+  requirePermission('USER_VIEW'),
+  requireAdminLike,
+  requireUserScope('userId'),
+  async (req, res, next) => {
+    try {
+      const target = req.targetUser
+      res.json({ success: true, data: (target.allowedIps || []).map((s) => String(s)) })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+router.post(
+  '/users/:userId/allowed-ips',
+  requirePermission('USER_UPDATE'),
+  requireAdminLike,
+  requireUserScope('userId'),
+  async (req, res, next) => {
+    try {
+      const { ip } = req.body || {}
+      if (!ip || typeof ip !== 'string') {
+        return res.status(400).json({ success: false, message: 'ip is required' })
+      }
+
+      const normalized = normalizeIp(ip)
+      if (!normalized || net.isIP(normalized) === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid IP address' })
+      }
+
+      const user = req.targetUser
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' })
+
+      if (isAdminLikeUser(user)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Super Admin and Admin users are not IP-restricted and do not need a whitelist'
+        })
+      }
+
+      user.allowedIps = user.allowedIps || []
+      if (!user.allowedIps.map((s) => normalizeIp(s)).includes(normalized)) {
+        user.allowedIps.push(normalized)
+        await user.save()
+      }
+
+      res.status(200).json({ success: true, data: user.allowedIps })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+router.delete(
+  '/users/:userId/allowed-ips',
+  requirePermission('USER_UPDATE'),
+  requireAdminLike,
+  requireUserScope('userId'),
+  async (req, res, next) => {
+    try {
+      const ip = req.body?.ip || req.query?.ip
+      if (!ip || typeof ip !== 'string') {
+        return res.status(400).json({ success: false, message: 'ip is required' })
+      }
+
+      const normalized = normalizeIp(ip)
+      if (!normalized) {
+        return res.status(400).json({ success: false, message: 'Invalid IP address' })
+      }
+
+      const user = req.targetUser
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' })
+
+      user.allowedIps = user.allowedIps || []
+      user.allowedIps = user.allowedIps.filter((s) => normalizeIp(s) !== normalized)
+      await user.save()
+
+      res.json({ success: true, data: user.allowedIps })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
 
 router.delete('/users/:id', requireSuperAdmin, async (req, res, next) => {
   try {
