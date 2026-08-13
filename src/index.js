@@ -1,7 +1,9 @@
 import dotenv from 'dotenv'
+import http from 'http'
 import app from './app.js'
 import connectDB from './config/db.js'
 import { seedRbacData } from './seed/seedRbac.js'
+import { initSocket } from './socket.js'
 
 dotenv.config()
 
@@ -12,7 +14,10 @@ const startServer = async () => {
     await connectDB()
     await seedRbacData()
 
-    app.listen(PORT, () => {
+    const server = http.createServer(app)
+    initSocket(server)
+
+    server.listen(PORT, () => {
       console.log(`Amtrix backend listening on http://localhost:${PORT}`)
     })
   } catch (error) {

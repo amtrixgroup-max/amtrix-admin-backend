@@ -21,7 +21,16 @@ const customerSchema = new mongoose.Schema({
   paymentTerms: String,
   loads: Number,
   revenue: Number,
-  status: String
+  status: String,
+  dunsNumber: String,
+  agentName: String,
+  agentEmail: String,
+  loadApprovedByCustomer: String,
+  departmentId: mongoose.Schema.Types.ObjectId,
+  approvalRequestId: mongoose.Schema.Types.ObjectId,
+  contacts: [mongoose.Schema.Types.Mixed],
+  privateNotes: String,
+  publicNotes: String
 })
 
 const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema)

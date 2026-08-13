@@ -10,6 +10,7 @@ import settingsRoutes from './routes/settings.js'
 import onboardingRoutes from './routes/onboarding.js'
 import adminRoutes from './routes/admin.js'
 import notificationsRoutes from './routes/notifications.js'
+import customerApprovalsRoutes from './routes/customerApprovals.js'
 import errorHandler from './middleware/errorHandler.js'
 
 const app = express()
@@ -27,6 +28,7 @@ app.use('/api/activity-logs', activitiesRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/onboarding', onboardingRoutes)
 app.use('/api/notifications', notificationsRoutes)
+app.use('/api/customer-approvals', customerApprovalsRoutes)
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Amtrix backend running' })
