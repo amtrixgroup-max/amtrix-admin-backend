@@ -28,8 +28,9 @@ router.post('/login', async (req, res, next) => {
     }
 
     // If account is temporarily locked due to failed attempts
+    // This check should only apply when the account is ACTIVE
     const now = new Date()
-    if (userDoc.lockedUntil && new Date(userDoc.lockedUntil) > now) {
+    if (status === 'ACTIVE' && userDoc.lockedUntil && new Date(userDoc.lockedUntil) > now) {
       const lockedUntil = new Date(userDoc.lockedUntil)
       return res.status(423).json({
         error: 'Account temporarily locked due to multiple failed login attempts',
