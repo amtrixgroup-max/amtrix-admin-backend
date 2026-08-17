@@ -52,6 +52,21 @@ router.get('/', async (req, res, next) => {
   }
 })
 
+router.put('/read-all', async (req, res, next) => {
+  try {
+    const typePrefix = String(req.query.typePrefix || req.body?.typePrefix || '').trim()
+    const filter = { userId: req.user._id, read: false }
+    if (typePrefix) {
+      filter['data.type'] = { $regex: `^${typePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` }
+    }
+
+    const result = await Notification.updateMany(filter, { $set: { read: true } })
+    res.json({ success: true, modified: result.modifiedCount || 0 })
+  } catch (error) {
+    next(error)
+  }
+})
+
 // Mark as read
 router.put('/:id/read', async (req, res, next) => {
   try {

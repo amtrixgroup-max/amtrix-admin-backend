@@ -3,6 +3,8 @@ import http from 'http'
 import app from './app.js'
 import connectDB from './config/db.js'
 import { seedRbacData } from './seed/seedRbac.js'
+import { seedAccountingData } from './seed/seedAccounting.js'
+import { seedLoadData } from './seed/seedLoads.js'
 import { initSocket } from './socket.js'
 
 dotenv.config()
@@ -13,6 +15,8 @@ const startServer = async () => {
   try {
     await connectDB()
     await seedRbacData()
+    await seedAccountingData()
+    await seedLoadData()
 
     const server = http.createServer(app)
     initSocket(server)

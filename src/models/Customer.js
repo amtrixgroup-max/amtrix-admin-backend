@@ -28,6 +28,7 @@ const customerSchema = new mongoose.Schema({
   loadApprovedByCustomer: String,
   departmentId: mongoose.Schema.Types.ObjectId,
   approvalRequestId: mongoose.Schema.Types.ObjectId,
+  approvalStatus: String,
   contacts: [mongoose.Schema.Types.Mixed],
   privateNotes: String,
   publicNotes: String

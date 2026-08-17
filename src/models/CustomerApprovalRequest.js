@@ -48,7 +48,25 @@ const customerApprovalRequestSchema = new mongoose.Schema(
     },
     reviewedByName: { type: String, default: '' },
     reviewedAt: { type: Date, default: null },
-    customerId: { type: mongoose.Schema.Types.Mixed, default: null }
+    customerId: { type: mongoose.Schema.Types.Mixed, default: null },
+
+    prepaidCreditRequired: { type: Number, default: null },
+    prepaidNotes: { type: String, default: '' },
+    prepaidRequestedAt: { type: Date, default: null },
+    prepaidRequestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    prepaidDocuments: [
+      {
+        originalName: String,
+        storedName: String,
+        mimeType: String,
+        size: Number,
+        uploadedAt: { type: Date, default: Date.now }
+      }
+    ]
   },
   { timestamps: true }
 )
