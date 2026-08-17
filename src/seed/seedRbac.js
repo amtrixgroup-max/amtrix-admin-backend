@@ -96,7 +96,9 @@ const buildDeptAdminPermissions = (permissionByName, deptCode) => [
   permRef(permissionByName, 'USER_CREATE', 'DEPARTMENT'),
   permRef(permissionByName, 'USER_UPDATE', 'DEPARTMENT'),
   permRef(permissionByName, 'ROLE_VIEW', 'DEPARTMENT'),
+  permRef(permissionByName, 'ROLE_UPDATE', 'DEPARTMENT'),
   permRef(permissionByName, 'PERMISSION_VIEW', 'DEPARTMENT'),
+  permRef(permissionByName, 'PERMISSION_UPDATE', 'DEPARTMENT'),
   permRef(permissionByName, 'DEPARTMENT_VIEW', 'DEPARTMENT'),
   permRef(permissionByName, 'REPORT_VIEW', 'DEPARTMENT'),
   permRef(permissionByName, 'REPORT_EXPORT', 'DEPARTMENT'),
@@ -115,6 +117,7 @@ const buildApRoleDefs = (permissionByName) => [
     permissions: [
       permRef(permissionByName, 'DASHBOARD_VIEW', 'OWN'),
       permRef(permissionByName, 'USER_VIEW', 'OWN'),
+      permRef(permissionByName, 'ROLE_VIEW', 'DEPARTMENT'),
       permRef(permissionByName, 'AP_VIEW', 'OWN')
     ]
   },
@@ -181,6 +184,7 @@ const buildGenericDeptRoles = (permissionByName, deptCode) => [
     permissions: [
       permRef(permissionByName, 'DASHBOARD_VIEW', 'OWN'),
       permRef(permissionByName, 'USER_VIEW', 'OWN'),
+      permRef(permissionByName, 'ROLE_VIEW', 'DEPARTMENT'),
       permRef(permissionByName, `${deptCode}_VIEW`, 'OWN')
     ]
   },

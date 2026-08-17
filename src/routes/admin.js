@@ -37,6 +37,23 @@ const requireAdminLike = (req, res, next) => {
   next()
 }
 
+async function isDeptAdminUser(user) {
+  if (!user) return false
+  if (String(user.role || '').toUpperCase() === 'DEPT_ADMIN') return true
+  if (!user.roleId) return false
+  const role = await Role.findById(user.roleId).select('name')
+  return String(role?.name || '').toUpperCase() === 'DEPT_ADMIN'
+}
+
+async function applyDeptAdminSystemRole(payload = {}) {
+  if (!payload?.roleId) return payload
+  const role = await Role.findById(payload.roleId).select('name')
+  if (role?.name === 'DEPT_ADMIN' && payload.systemRole !== 'SUPER_ADMIN') {
+    payload.systemRole = 'ADMIN'
+  }
+  return payload
+}
+
 // ---------- Departments ----------
 router.get('/departments', requirePermission('DEPARTMENT_VIEW'), async (req, res, next) => {
   try {
@@ -76,10 +93,13 @@ router.put('/departments/:id', requireSuperAdmin, async (req, res, next) => {
 })
 
 // ---------- Roles ----------
-router.get('/roles', requirePermission('ROLE_VIEW'), async (req, res, next) => {
+router.get('/roles', async (req, res, next) => {
   try {
     const filter = {}
     if (!isSuperAdmin(req.user)) {
+      if (!req.user.departmentId) {
+        return res.json({ success: true, data: [] })
+      }
       filter.departmentId = req.user.departmentId
     } else if (req.query.departmentId) {
       filter.departmentId = req.query.departmentId
@@ -120,9 +140,18 @@ router.put('/roles/:id', requireSuperAdmin, async (req, res, next) => {
   }
 })
 
-router.put('/roles/:roleId/permissions', requireSuperAdmin, async (req, res, next) => {
+router.put('/roles/:roleId/permissions', async (req, res, next) => {
   try {
-    const { permissions } = req.body
+    const superAdmin = isSuperAdmin(req.user)
+    const deptAdmin = await isDeptAdminUser(req.user)
+    if (!superAdmin && !deptAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not allowed to update role permissions'
+      })
+    }
+
+    let { permissions } = req.body
     if (!Array.isArray(permissions)) {
       return res.status(400).json({
         success: false,
@@ -130,15 +159,29 @@ router.put('/roles/:roleId/permissions', requireSuperAdmin, async (req, res, nex
       })
     }
 
+    const existing = await Role.findById(req.params.roleId)
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Role not found' })
+    }
+
+    if (!superAdmin) {
+      if (String(existing.departmentId || '') !== String(req.user.departmentId || '')) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only update roles in your department'
+        })
+      }
+      permissions = permissions.map((item) => ({
+        ...item,
+        scope: item?.scope === 'ALL' ? 'DEPARTMENT' : item?.scope || 'DEPARTMENT'
+      }))
+    }
+
     const role = await Role.findByIdAndUpdate(
       req.params.roleId,
       { permissions },
       { new: true, runValidators: true }
     ).populate('permissions.permissionId', 'name displayName module action')
-
-    if (!role) {
-      return res.status(404).json({ success: false, message: 'Role not found' })
-    }
 
     res.json({ success: true, data: role })
   } catch (error) {
@@ -207,6 +250,8 @@ router.post('/users', requirePermission('USER_CREATE'), async (req, res, next) =
       }
     }
 
+    await applyDeptAdminSystemRole(req.body)
+
     // Enforce password policy only when password provided
     if (req.body.password && !isPasswordValid(req.body.password)) {
       return res.status(400).json({ success: false, message: 'Password does not meet complexity requirements' })
@@ -236,6 +281,8 @@ router.put('/users/:id', requirePermission('USER_UPDATE'), async (req, res, next
         message: 'Cannot promote to Super Admin'
       })
     }
+
+    await applyDeptAdminSystemRole(payload)
 
     const query = /^[a-f\d]{24}$/i.test(req.params.id)
       ? { _id: req.params.id }
