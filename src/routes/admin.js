@@ -9,6 +9,7 @@ import { requirePermission, requireUserScope } from '../middleware/requirePermis
 import net from 'net'
 import { getEffectivePermissions } from '../utils/permissions.js'
 import { isAdminLikeUser, normalizeIp } from '../utils/ipAccess.js'
+import { logActivity } from '../utils/activityLog.js'
 
 const router = express.Router()
 
@@ -259,6 +260,13 @@ router.post('/users', requirePermission('USER_CREATE'), async (req, res, next) =
 
     const user = await User.create(req.body)
     const safe = user.toJSON()
+    await logActivity({
+      req,
+      action: 'User Added',
+      description: `New user ${user.name || user.email} created`,
+      type: 'create',
+      module: 'Users'
+    })
     res.status(201).json({ success: true, data: safe })
   } catch (error) {
     next(error)

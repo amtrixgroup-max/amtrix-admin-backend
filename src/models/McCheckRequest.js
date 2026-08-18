@@ -45,6 +45,7 @@ const mcCheckRequestSchema = new mongoose.Schema(
       default: null
     },
     reviewedByName: { type: String, default: '' },
+    reviewedByEmail: { type: String, default: '' },
     reviewedAt: { type: Date, default: null },
 
     exceptionReason: { type: String, default: '' },
@@ -61,6 +62,7 @@ const mcCheckRequestSchema = new mongoose.Schema(
       default: null
     },
     exceptionReviewedByName: { type: String, default: '' },
+    exceptionReviewedByEmail: { type: String, default: '' },
     exceptionReviewedAt: { type: Date, default: null },
 
     addCarrierRequestedAt: { type: Date, default: null },
@@ -82,7 +84,8 @@ const mcCheckRequestSchema = new mongoose.Schema(
         ref: 'User',
         default: null
       },
-      searchedByName: { type: String, default: '' }
+      searchedByName: { type: String, default: '' },
+      searchedByEmail: { type: String, default: '' }
     }
   },
   { timestamps: true }

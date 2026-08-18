@@ -13,6 +13,7 @@ import {
   parseListedIps,
   shouldEnforceListedIp
 } from '../utils/ipAccess.js'
+import { logActivity } from '../utils/activityLog.js'
 
 const router = express.Router()
 
@@ -129,14 +130,17 @@ router.post('/login', async (req, res, next) => {
       userDoc.activeSessions = []
     }
 
+    const userAgent = String(req.headers['user-agent'] || '')
     userDoc.lastLoginAt = new Date()
+    userDoc.lastLoginUserAgent = userAgent
     userDoc.failedLoginAttempts = 0
     userDoc.loginAttemptLogs = userDoc.loginAttemptLogs || []
     userDoc.loginAttemptLogs.push({
       ip: clientIp,
       isListed,
       success: true,
-      reason: 'Login successful'
+      reason: 'Login successful',
+      userAgent
     })
 
     const user = await buildAuthUserPayload(userDoc)
@@ -158,8 +162,16 @@ router.post('/login', async (req, res, next) => {
 
     // Persist new active session
     userDoc.activeSessions = userDoc.activeSessions || []
-    userDoc.activeSessions.push({ jti, ip: clientIp, createdAt: new Date() })
+    userDoc.activeSessions.push({ jti, ip: clientIp, userAgent, createdAt: new Date() })
     await userDoc.save()
+
+    await logActivity({
+      user: userDoc,
+      action: 'User Logged In',
+      description: `${userDoc.name || userDoc.email} signed in`,
+      type: 'success',
+      module: 'Auth'
+    })
 
     // Keep previous response fields for existing frontend + add RBAC fields
     res.json({

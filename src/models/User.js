@@ -104,6 +104,11 @@ const userSchema = new mongoose.Schema(
       default: null
     },
 
+    lastLoginUserAgent: {
+      type: String,
+      default: ''
+    },
+
     failedLoginAttempts: {
       type: Number,
       default: 0
@@ -119,6 +124,7 @@ const userSchema = new mongoose.Schema(
       {
         jti: String,
         ip: String,
+        userAgent: String,
         createdAt: { type: Date, default: () => new Date() }
       }
     ],
@@ -129,6 +135,7 @@ const userSchema = new mongoose.Schema(
         isListed: Boolean,
         success: Boolean,
         reason: String,
+        userAgent: String,
         createdAt: { type: Date, default: () => new Date() }
       }
     ],

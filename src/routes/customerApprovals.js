@@ -6,6 +6,7 @@ import Department from '../models/Department.js'
 import { authenticate } from '../middleware/auth.js'
 import { notifyUser, notifyUsers, notifyCustomerContact } from '../utils/notify.js'
 import { sendMail } from '../utils/mailer.js'
+import { logActivity } from '../utils/activityLog.js'
 import Customer from '../models/Customer.js'
 import { uploadPrepaidPdfs, PREPAID_UPLOAD_DIR } from '../middleware/uploadPrepaid.js'
 import path from 'path'
@@ -25,17 +26,56 @@ const getRoleName = async (user) => {
   return user.role || null
 }
 
+const normalizeRole = (value) =>
+  String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+
+const isSuperAdminUser = (user) =>
+  Boolean(user && (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN'))
+
+const isElevatedAdmin = async (user) => {
+  if (!user) return false
+  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return true
+  const name = normalizeRole(await getRoleName(user))
+  return name === 'DEPT_ADMIN' || name === 'DEPARTMENT_ADMIN'
+}
+
 const isAccountsUser = async (user) => {
-  const name = String(await getRoleName(user) || '').toUpperCase()
+  if (!user || isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
+  const name = normalizeRole(await getRoleName(user))
   return name === 'ACCOUNTS' || name === 'ACCOUNT'
+}
+
+const canReviewApprovals = async (user) => {
+  if (!user) return false
+  if (await isElevatedAdmin(user)) return true
+  return isAccountsUser(user)
 }
 
 const canSubmitApproval = async (user) => {
   if (!user?.departmentId) return false
-  if (user.systemRole === 'SUPER_ADMIN' || user.systemRole === 'ADMIN') return false
-  const roleName = String(await getRoleName(user) || '').toUpperCase()
+  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
+  const roleName = normalizeRole(await getRoleName(user))
   if (['SUPER_ADMIN', 'DEPT_ADMIN', 'ACCOUNTS', 'ACCOUNT'].includes(roleName)) return false
   return true
+}
+
+const departmentFilterForViewer = (user) => {
+  if (isSuperAdminUser(user)) return {}
+  if (user?.departmentId) return { departmentId: user.departmentId }
+  return {}
+}
+
+const canAccessDepartmentItem = async (user, item) => {
+  if (!user || !item) return false
+  if (isSuperAdminUser(user)) return true
+  if (await isElevatedAdmin(user)) {
+    if (!user.departmentId) return true
+    return sameDepartment(user, item)
+  }
+  return sameDepartment(user, item)
 }
 
 const findAccountsUsers = async (departmentId) => {
@@ -61,7 +101,10 @@ const findAccountsUsers = async (departmentId) => {
       roleName === 'ACCOUNT' ||
       displayName === 'ACCOUNTS' ||
       displayName === 'ACCOUNT' ||
-      displayName.includes('ACCOUNT')
+      displayName.includes('ACCOUNT') ||
+      roleName === 'DEPT_ADMIN' ||
+      roleName === 'DEPARTMENT_ADMIN' ||
+      user.systemRole === 'ADMIN'
     )
   })
 }
@@ -81,6 +124,7 @@ const sameDepartment = (user, item) =>
 const canViewApprovalRequest = async (user, item) => {
   if (!user || !item) return false
   if (String(item.requesterId) === String(user._id)) return true
+  if (await isElevatedAdmin(user)) return canAccessDepartmentItem(user, item)
   const accounts = await isAccountsUser(user)
   return accounts && sameDepartment(user, item)
 }
@@ -322,6 +366,14 @@ router.post('/', async (req, res, next) => {
       console.error('Submit notification failed:', notifyError?.message || notifyError)
     }
 
+    await logActivity({
+      req,
+      action: 'Customer Approval Submitted',
+      description: `${req.user.name || 'A user'} submitted a customer approval request for ${request.companyName}`,
+      type: 'create',
+      module: 'Customers'
+    })
+
     res.status(201).json({ success: true, data: serializeRequest(request) })
   } catch (error) {
     next(error)
@@ -331,14 +383,12 @@ router.post('/', async (req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     const accounts = await isAccountsUser(req.user)
-    if (!accounts) {
-      return res.status(403).json({ success: false, message: 'Only Accounts users can view approval requests' })
+    const elevated = await isElevatedAdmin(req.user)
+    if (!accounts && !elevated) {
+      return res.status(403).json({ success: false, message: 'Only Accounts users or admins can view approval requests' })
     }
 
-    const filter = {}
-    if (req.user.departmentId) {
-      filter.departmentId = req.user.departmentId
-    }
+    const filter = departmentFilterForViewer(req.user)
     if (req.query.status) {
       filter.status = String(req.query.status).toUpperCase()
     }
@@ -412,6 +462,8 @@ router.post(
     item.prepaidNotes = notes
     item.prepaidRequestedAt = new Date()
     item.prepaidRequestedBy = req.user._id
+    item.prepaidRequestedByName = req.user.name || ''
+    item.prepaidRequestedByEmail = req.user.email || ''
     item.prepaidDocuments = files.map((file) => ({
       originalName: file.originalname,
       storedName: file.filename,
@@ -455,6 +507,14 @@ router.post(
     } catch (notifyError) {
       console.error('Prepaid request notification failed:', notifyError?.message || notifyError)
     }
+
+    await logActivity({
+      req,
+      action: 'Prepaid Requested',
+      description: `${req.user.name || 'A user'} requested prepaid review for ${item.companyName}`,
+      type: 'info',
+      module: 'Customers'
+    })
 
     res.json({ success: true, data: serializeRequest(item) })
   } catch (error) {
@@ -505,18 +565,18 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/:id/review', async (req, res, next) => {
   try {
-    const accounts = await isAccountsUser(req.user)
-    if (!accounts) {
+    const allowedReviewer = await canReviewApprovals(req.user)
+    if (!allowedReviewer) {
       return res.status(403).json({
         success: false,
-        message: 'Only Accounts users can review requests'
+        message: 'Only Accounts users or admins can review requests'
       })
     }
 
     const item = await CustomerApprovalRequest.findById(req.params.id)
     if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
 
-    if (!req.user.departmentId || String(item.departmentId) !== String(req.user.departmentId)) {
+    if (!(await canAccessDepartmentItem(req.user, item))) {
       return res.status(403).json({ success: false, message: 'Request is outside your department' })
     }
 
@@ -533,6 +593,7 @@ router.post('/:id/review', async (req, res, next) => {
 
     item.reviewedBy = req.user._id
     item.reviewedByName = req.user.name || ''
+    item.reviewedByEmail = req.user.email || ''
     item.reviewedAt = new Date()
     if (notes) item.reviewNotes = notes
 
@@ -570,6 +631,14 @@ router.post('/:id/review', async (req, res, next) => {
     } catch (notifyError) {
       console.error('Review notification failed:', notifyError?.message || notifyError)
     }
+
+    await logActivity({
+      req,
+      action: action === 'approve' ? 'Customer Approved' : 'Customer Rejected',
+      description: `${req.user.name || 'Accounts'} ${action === 'approve' ? 'approved' : 'rejected'} ${item.companyName}`,
+      type: action === 'approve' ? 'success' : 'warning',
+      module: 'Customers'
+    })
 
     res.json({
       success: true,

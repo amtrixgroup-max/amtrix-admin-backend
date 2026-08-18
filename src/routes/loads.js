@@ -4,6 +4,7 @@ import Load from '../models/Load.js'
 import LoadTemplate from '../models/LoadTemplate.js'
 import LoadSearchReport from '../models/LoadSearchReport.js'
 import { authenticate } from '../middleware/auth.js'
+import { logActivity } from '../utils/activityLog.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -306,6 +307,13 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const load = await Load.create(createLoadDefaults(req.body || {}, req.user))
+    await logActivity({
+      req,
+      action: 'Load Created',
+      description: `New load #${load.id} created${load.customer ? ` for ${load.customer}` : ''}`,
+      type: 'create',
+      module: 'Loads'
+    })
     res.status(201).json({ success: true, data: serialize(load) })
   } catch (error) {
     next(error)
@@ -349,6 +357,29 @@ router.put('/:id', async (req, res, next) => {
     }
 
     const load = await Load.findByIdAndUpdate(existing._id, { $set: payload }, { new: true })
+    const status = String(load?.loadStatus || '').toLowerCase()
+    const previousStatus = String(existing.loadStatus || '').toLowerCase()
+    if (status && status !== previousStatus) {
+      let action = 'Load Updated'
+      let type = 'update'
+      if (status.includes('deliver')) {
+        action = 'Load Delivered'
+        type = 'success'
+      } else if (status.includes('cancel')) {
+        action = 'Load Cancelled'
+        type = 'warning'
+      } else if (status.includes('invoice')) {
+        action = 'Invoice Generated'
+        type = 'info'
+      }
+      await logActivity({
+        req,
+        action,
+        description: `Load #${load.id} ${status.includes('deliver') ? 'delivered' : status.includes('cancel') ? 'cancelled' : `updated to ${load.loadStatus}`}${load.customer ? ` for ${load.customer}` : ''}`,
+        type,
+        module: 'Loads'
+      })
+    }
     res.json({ success: true, data: serialize(load) })
   } catch (error) {
     next(error)

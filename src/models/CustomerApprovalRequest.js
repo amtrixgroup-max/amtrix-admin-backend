@@ -47,6 +47,7 @@ const customerApprovalRequestSchema = new mongoose.Schema(
       default: null
     },
     reviewedByName: { type: String, default: '' },
+    reviewedByEmail: { type: String, default: '' },
     reviewedAt: { type: Date, default: null },
     customerId: { type: mongoose.Schema.Types.Mixed, default: null },
 
@@ -58,6 +59,8 @@ const customerApprovalRequestSchema = new mongoose.Schema(
       ref: 'User',
       default: null
     },
+    prepaidRequestedByName: { type: String, default: '' },
+    prepaidRequestedByEmail: { type: String, default: '' },
     prepaidDocuments: [
       {
         originalName: String,

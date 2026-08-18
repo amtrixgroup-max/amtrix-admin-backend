@@ -2,6 +2,7 @@ import express from 'express'
 import User from '../models/User.js'
 import { isPasswordValid } from '../utils/passwordPolicy.js'
 import { authenticate } from '../middleware/auth.js'
+import { logActivity } from '../utils/activityLog.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -54,6 +55,13 @@ router.post('/', async (req, res, next) => {
 
     const user = new User(payload)
     await user.save()
+    await logActivity({
+      req,
+      action: 'User Added',
+      description: `New user ${user.name || user.email} created`,
+      type: 'create',
+      module: 'Users'
+    })
     res.status(201).json(sanitizeUser(user))
   } catch (error) {
     next(error)

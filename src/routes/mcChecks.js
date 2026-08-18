@@ -5,6 +5,7 @@ import Role from '../models/Role.js'
 import Department from '../models/Department.js'
 import { authenticate } from '../middleware/auth.js'
 import { notifyUser, notifyUsers } from '../utils/notify.js'
+import { logActivity } from '../utils/activityLog.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -39,21 +40,56 @@ const isNormalUserRole = (roleName) => {
   return name === 'NORMAL_USER' || name === 'USER'
 }
 
+const isSuperAdminUser = (user) =>
+  Boolean(user && (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN'))
+
+const isElevatedAdmin = async (user) => {
+  if (!user) return false
+  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return true
+  const meta = await getRoleMeta(user)
+  const name = normalizeRole(meta.name)
+  return name === 'DEPT_ADMIN' || name === 'DEPARTMENT_ADMIN'
+}
+
 const isComplianceUser = async (user) => {
-  if (!user || user.systemRole === 'SUPER_ADMIN' || user.systemRole === 'ADMIN') return false
+  if (!user || isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
   const meta = await getRoleMeta(user)
   return isComplianceRole(meta.name, meta.displayName)
 }
 
 const canSubmitMcCheck = async (user) => {
   if (!user?.departmentId) return false
-  if (user.systemRole === 'SUPER_ADMIN' || user.systemRole === 'ADMIN') return false
+  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
   const meta = await getRoleMeta(user)
   const roleName = String(meta.name || '')
   if (['SUPER_ADMIN', 'DEPT_ADMIN', 'ACCOUNTS', 'ACCOUNT', 'COMPLIANCE', 'TL'].includes(normalizeRole(roleName))) {
     return false
   }
   return isNormalUserRole(roleName)
+}
+
+const canReviewMcCheck = async (user) => {
+  if (!user) return false
+  if (await isElevatedAdmin(user)) return true
+  return isComplianceUser(user)
+}
+
+const canSeeAllDepartments = (user) => isSuperAdminUser(user)
+
+const departmentFilterForViewer = (user) => {
+  if (canSeeAllDepartments(user)) return {}
+  if (user?.departmentId) return { departmentId: user.departmentId }
+  return {}
+}
+
+const canAccessDepartmentItem = async (user, item) => {
+  if (!user || !item) return false
+  if (canSeeAllDepartments(user)) return true
+  if (await isElevatedAdmin(user)) {
+    if (!user.departmentId) return true
+    return sameDepartment(user, item)
+  }
+  return sameDepartment(user, item)
 }
 
 const findComplianceUsers = async (departmentId) => {
@@ -64,7 +100,10 @@ const findComplianceUsers = async (departmentId) => {
     .select('-password')
 
   let matches = users.filter((user) =>
-    isComplianceRole(user.roleId?.name || user.role, user.roleId?.displayName)
+    isComplianceRole(user.roleId?.name || user.role, user.roleId?.displayName) ||
+    user.systemRole === 'ADMIN' ||
+    normalizeRole(user.roleId?.name || user.role) === 'DEPT_ADMIN' ||
+    normalizeRole(user.roleId?.name || user.role) === 'DEPARTMENT_ADMIN'
   )
 
   if (!matches.length) {
@@ -98,6 +137,7 @@ const sameDepartment = (user, item) =>
 const canViewRequest = async (user, item) => {
   if (!user || !item) return false
   if (String(item.requesterId) === String(user._id)) return true
+  if (await isElevatedAdmin(user)) return canAccessDepartmentItem(user, item)
   const compliance = await isComplianceUser(user)
   return compliance && sameDepartment(user, item)
 }
@@ -193,6 +233,14 @@ router.post('/', async (req, res, next) => {
       console.error('Check MC submit notification failed:', notifyError?.message || notifyError)
     }
 
+    await logActivity({
+      req,
+      action: 'Check MC Submitted',
+      description: `${req.user.name || 'A user'} submitted a Check MC request for ${identifierLabel(request)}`,
+      type: 'create',
+      module: 'Carriers'
+    })
+
     res.status(201).json({ success: true, data: serializeRequest(request) })
   } catch (error) {
     next(error)
@@ -202,9 +250,10 @@ router.post('/', async (req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     const compliance = await isComplianceUser(req.user)
+    const elevated = await isElevatedAdmin(req.user)
     const normalUser = await canSubmitMcCheck(req.user)
 
-    if (!compliance && !normalUser) {
+    if (!compliance && !elevated && !normalUser) {
       return res.status(403).json({
         success: false,
         message: 'You are not allowed to view Check MC requests'
@@ -212,8 +261,8 @@ router.get('/', async (req, res, next) => {
     }
 
     const filter = {}
-    if (compliance) {
-      if (req.user.departmentId) filter.departmentId = req.user.departmentId
+    if (compliance || elevated) {
+      Object.assign(filter, departmentFilterForViewer(req.user))
     } else {
       filter.requesterId = req.user._id
     }
@@ -247,18 +296,18 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/:id/review', async (req, res, next) => {
   try {
-    const compliance = await isComplianceUser(req.user)
-    if (!compliance) {
+    const allowedReviewer = await canReviewMcCheck(req.user)
+    if (!allowedReviewer) {
       return res.status(403).json({
         success: false,
-        message: 'Only compliance team can review Check MC requests'
+        message: 'Only compliance team or admins can review Check MC requests'
       })
     }
 
     const item = await McCheckRequest.findById(req.params.id)
     if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
 
-    if (!sameDepartment(req.user, item)) {
+    if (!(await canAccessDepartmentItem(req.user, item))) {
       return res.status(403).json({ success: false, message: 'Request is outside your department' })
     }
 
@@ -292,12 +341,14 @@ router.post('/:id/review', async (req, res, next) => {
     if (isExceptionReview) {
       item.exceptionReviewedBy = req.user._id
       item.exceptionReviewedByName = req.user.name || ''
+      item.exceptionReviewedByEmail = req.user.email || ''
       item.exceptionReviewedAt = new Date()
       item.exceptionReviewNotes = notes
       item.status = action === 'approve' ? 'EXCEPTION_APPROVED' : 'EXCEPTION_REJECTED'
     } else {
       item.reviewedBy = req.user._id
       item.reviewedByName = req.user.name || ''
+      item.reviewedByEmail = req.user.email || ''
       item.reviewedAt = new Date()
       item.reviewNotes = notes
       item.status = action === 'approve' ? 'APPROVED' : 'REJECTED'
@@ -344,6 +395,20 @@ router.post('/:id/review', async (req, res, next) => {
     } catch (notifyError) {
       console.error('Check MC review notification failed:', notifyError?.message || notifyError)
     }
+
+    await logActivity({
+      req,
+      action: isExceptionReview
+        ? action === 'approve'
+          ? 'Check MC Exception Approved'
+          : 'Check MC Exception Rejected'
+        : action === 'approve'
+          ? 'Check MC Approved'
+          : 'Check MC Rejected',
+      description: `${req.user.name || 'Reviewer'} ${action === 'approve' ? 'approved' : 'rejected'} Check MC for ${identifierLabel(item)}`,
+      type: action === 'approve' ? 'success' : 'warning',
+      module: 'Carriers'
+    })
 
     res.json({ success: true, data: serializeRequest(item) })
   } catch (error) {
@@ -418,6 +483,14 @@ router.post('/:id/exception', async (req, res, next) => {
       console.error('Check MC exception notification failed:', notifyError?.message || notifyError)
     }
 
+    await logActivity({
+      req,
+      action: 'Check MC Exception Requested',
+      description: `${req.user.name || 'A user'} requested an exception for ${identifierLabel(item)}`,
+      type: 'warning',
+      module: 'Carriers'
+    })
+
     res.json({ success: true, data: serializeRequest(item) })
   } catch (error) {
     next(error)
@@ -484,6 +557,14 @@ router.post('/:id/add-carrier', async (req, res, next) => {
       console.error('Add carrier notification failed:', notifyError?.message || notifyError)
     }
 
+    await logActivity({
+      req,
+      action: 'Add Carrier Requested',
+      description: `${req.user.name || 'A user'} requested to add a carrier for ${identifierLabel(item)}`,
+      type: 'info',
+      module: 'Carriers'
+    })
+
     res.json({ success: true, data: serializeRequest(item) })
   } catch (error) {
     next(error)
@@ -492,18 +573,18 @@ router.post('/:id/add-carrier', async (req, res, next) => {
 
 router.post('/:id/dot-gate', async (req, res, next) => {
   try {
-    const compliance = await isComplianceUser(req.user)
-    if (!compliance) {
+    const allowedReviewer = await canReviewMcCheck(req.user)
+    if (!allowedReviewer) {
       return res.status(403).json({
         success: false,
-        message: 'Only compliance team can submit DOT Gate Prequalification'
+        message: 'Only compliance team or admins can submit DOT Gate Prequalification'
       })
     }
 
     const item = await McCheckRequest.findById(req.params.id)
     if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
 
-    if (!sameDepartment(req.user, item)) {
+    if (!(await canAccessDepartmentItem(req.user, item))) {
       return res.status(403).json({ success: false, message: 'Request is outside your department' })
     }
 
@@ -536,7 +617,8 @@ router.post('/:id/dot-gate', async (req, res, next) => {
       intrastateNumber,
       searchedAt: new Date(),
       searchedBy: req.user._id,
-      searchedByName: req.user.name || ''
+      searchedByName: req.user.name || '',
+      searchedByEmail: req.user.email || ''
     }
     item.status = 'CARRIER_ADDED'
     await item.save()
@@ -563,6 +645,14 @@ router.post('/:id/dot-gate', async (req, res, next) => {
     } catch (notifyError) {
       console.error('DOT Gate notification failed:', notifyError?.message || notifyError)
     }
+
+    await logActivity({
+      req,
+      action: 'Carrier Added',
+      description: `${req.user.name || 'Compliance'} completed DOT Gate Prequalification for ${identifierLabel(item)}`,
+      type: 'success',
+      module: 'Carriers'
+    })
 
     res.json({ success: true, data: serializeRequest(item) })
   } catch (error) {

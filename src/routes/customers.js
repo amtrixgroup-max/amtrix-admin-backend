@@ -3,6 +3,7 @@ import Customer from '../models/Customer.js'
 import CustomerApprovalRequest from '../models/CustomerApprovalRequest.js'
 import Role from '../models/Role.js'
 import { authenticate } from '../middleware/auth.js'
+import { logActivity } from '../utils/activityLog.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -184,6 +185,14 @@ router.post('/', async (req, res, next) => {
         status: payload.approvalStatus || payload.status || 'APPROVED'
       })
     }
+
+    await logActivity({
+      req,
+      action: 'Customer Added',
+      description: `New customer ${customer.name || customer.id} onboarded`,
+      type: 'create',
+      module: 'Customers'
+    })
 
     res.status(201).json(serializeCustomer(customer))
   } catch (error) {
