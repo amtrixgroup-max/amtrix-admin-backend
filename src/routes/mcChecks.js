@@ -1,160 +1,44 @@
 import express from 'express'
 import McCheckRequest from '../models/McCheckRequest.js'
 import User from '../models/User.js'
-import Role from '../models/Role.js'
 import Department from '../models/Department.js'
 import { authenticate } from '../middleware/auth.js'
 import { notifyUser, notifyUsers } from '../utils/notify.js'
 import { logActivity } from '../utils/activityLog.js'
+import { getDotGateDummyPreview } from '../data/dotGateDummy.js'
+import {
+  canAccessDepartmentItem,
+  canReviewMcCheck,
+  canRevokeOrBlockMcCheck,
+  canSubmitMcCheck,
+  canViewRequest,
+  departmentFilterForViewer,
+  findComplianceUsers,
+  identifierLabel,
+  isComplianceUser,
+  isElevatedAdmin,
+  serializeRequest,
+} from '../utils/mcCheckAccess.js'
 
 const router = express.Router()
 router.use(authenticate)
 
-const getRoleMeta = async (user) => {
-  if (user.systemRole === 'SUPER_ADMIN') return { name: 'SUPER_ADMIN', displayName: 'Super Admin' }
-  if (user.roleId) {
-    const role = await Role.findById(user.roleId).select('name displayName').lean()
-    if (role?.name) return { name: role.name, displayName: role.displayName || '' }
-  }
-  return { name: user.role || null, displayName: '' }
-}
-
-const normalizeRole = (value) =>
-  String(value || '')
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, '_')
-
-const isComplianceRole = (roleName, displayName = '') => {
-  const name = normalizeRole(roleName)
-  const display = normalizeRole(displayName)
-  return (
-    name === 'COMPLIANCE' ||
-    display === 'COMPLIANCE' ||
-    display.includes('COMPLIANCE')
-  )
-}
-
-const isNormalUserRole = (roleName) => {
-  const name = normalizeRole(roleName)
-  return name === 'NORMAL_USER' || name === 'USER'
-}
-
-const isSuperAdminUser = (user) =>
-  Boolean(user && (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN'))
-
-const isElevatedAdmin = async (user) => {
-  if (!user) return false
-  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return true
-  const meta = await getRoleMeta(user)
-  const name = normalizeRole(meta.name)
-  return name === 'DEPT_ADMIN' || name === 'DEPARTMENT_ADMIN'
-}
-
-const isComplianceUser = async (user) => {
-  if (!user || isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
-  const meta = await getRoleMeta(user)
-  return isComplianceRole(meta.name, meta.displayName)
-}
-
-const canSubmitMcCheck = async (user) => {
-  if (!user?.departmentId) return false
-  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
-  const meta = await getRoleMeta(user)
-  const roleName = String(meta.name || '')
-  if (['SUPER_ADMIN', 'DEPT_ADMIN', 'ACCOUNTS', 'ACCOUNT', 'COMPLIANCE', 'TL'].includes(normalizeRole(roleName))) {
-    return false
-  }
-  return isNormalUserRole(roleName)
-}
-
-const canReviewMcCheck = async (user) => {
-  if (!user) return false
-  if (await isElevatedAdmin(user)) return true
-  return isComplianceUser(user)
-}
-
-const canSeeAllDepartments = (user) => isSuperAdminUser(user)
-
-const departmentFilterForViewer = (user) => {
-  if (canSeeAllDepartments(user)) return {}
-  if (user?.departmentId) return { departmentId: user.departmentId }
-  return {}
-}
-
-const canAccessDepartmentItem = async (user, item) => {
-  if (!user || !item) return false
-  if (canSeeAllDepartments(user)) return true
-  if (await isElevatedAdmin(user)) {
-    if (!user.departmentId) return true
-    return sameDepartment(user, item)
-  }
-  return sameDepartment(user, item)
-}
-
-const findComplianceUsers = async (departmentId) => {
-  const activeFilter = { status: { $in: ['ACTIVE', 'Active'] } }
-  const query = departmentId ? { ...activeFilter, departmentId } : activeFilter
-  const users = await User.find(query)
-    .populate('roleId', 'name displayName')
-    .select('-password')
-
-  let matches = users.filter((user) =>
-    isComplianceRole(user.roleId?.name || user.role, user.roleId?.displayName) ||
-    user.systemRole === 'ADMIN' ||
-    normalizeRole(user.roleId?.name || user.role) === 'DEPT_ADMIN' ||
-    normalizeRole(user.roleId?.name || user.role) === 'DEPARTMENT_ADMIN'
-  )
-
-  if (!matches.length) {
-    const allUsers = await User.find(activeFilter)
-      .populate('roleId', 'name displayName')
-      .select('-password')
-    matches = allUsers.filter((user) =>
-      isComplianceRole(user.roleId?.name || user.role, user.roleId?.displayName)
-    )
-  }
-
-  return matches
-}
-
-const serializeRequest = (doc) => {
-  if (!doc) return null
-  const obj = doc.toObject ? doc.toObject() : { ...doc }
-  const status = String(obj.status || '').toUpperCase()
-  return {
-    ...obj,
-    id: obj._id,
-    canRequestAddCarrier: ['APPROVED', 'EXCEPTION_APPROVED'].includes(status),
-    canRequestException: status === 'REJECTED',
-    canShowDotGate: status === 'ADD_CARRIER_REQUESTED'
-  }
-}
-
-const sameDepartment = (user, item) =>
-  Boolean(user?.departmentId && item?.departmentId && String(user.departmentId) === String(item.departmentId))
-
-const canViewRequest = async (user, item) => {
-  if (!user || !item) return false
-  if (String(item.requesterId) === String(user._id)) return true
-  if (await isElevatedAdmin(user)) return canAccessDepartmentItem(user, item)
-  const compliance = await isComplianceUser(user)
-  return compliance && sameDepartment(user, item)
-}
-
-const identifierLabel = (item) => {
-  const parts = []
-  if (item.mcNo) parts.push(`MC ${item.mcNo}`)
-  if (item.dotNo) parts.push(`DOT ${item.dotNo}`)
-  return parts.join(' / ') || 'carrier check'
-}
+const notifyOptions = { skipEmail: true }
 
 async function notifyRequester(item, payload) {
   if (!item?.requesterId) return
   const requester = await User.findById(item.requesterId).select('-password')
   if (requester) {
-    await notifyUser({ user: requester, ...payload })
+    await notifyUser({ user: requester, ...payload, ...notifyOptions })
   }
+}
+
+async function rejectIfBlockedIdentifier(mcNo, dotNo) {
+  const clauses = []
+  if (mcNo) clauses.push({ mcNo })
+  if (dotNo) clauses.push({ dotNo })
+  if (!clauses.length) return null
+  return McCheckRequest.findOne({ status: 'BLOCKED', $or: clauses })
 }
 
 router.post('/', async (req, res, next) => {
@@ -187,6 +71,14 @@ router.post('/', async (req, res, next) => {
       })
     }
 
+    const blocked = await rejectIfBlockedIdentifier(mcNo, dotNo)
+    if (blocked) {
+      return res.status(400).json({
+        success: false,
+        message: `This MC/DOT is blocked${blocked.blockReason ? `: ${blocked.blockReason}` : '.'}`
+      })
+    }
+
     const department = await Department.findById(req.user.departmentId).lean()
 
     const request = await McCheckRequest.create({
@@ -214,19 +106,7 @@ router.post('/', async (req, res, next) => {
             requestId: String(request._id),
             status: 'PENDING'
           },
-          emailSubject: `[Amtrix] New Check MC request — ${identifierLabel(request)}`,
-          emailText: [
-            `A new Check MC request was submitted in the ${request.departmentName || request.departmentCode || 'department'} workspace.`,
-            '',
-            `Requester: ${request.requesterName} (${request.requesterEmail})`,
-            request.mcNo ? `MC No: ${request.mcNo}` : '',
-            request.dotNo ? `DOT Number: ${request.dotNo}` : '',
-            request.equipmentType ? `Equipment Type: ${request.equipmentType}` : '',
-            '',
-            'Please review this request in Amtrix Admin → MC Check Requests.'
-          ]
-            .filter(Boolean)
-            .join('\n')
+          ...notifyOptions
         })
       }
     } catch (notifyError) {
@@ -314,14 +194,16 @@ router.post('/:id/review', async (req, res, next) => {
     const action = String(req.body?.action || '').toLowerCase()
     const notes = String(req.body?.reason || req.body?.notes || req.body?.reviewNotes || '').trim()
 
-    if (!['approve', 'reject'].includes(action)) {
+    if (!['approve', 'reject', 'accept'].includes(action)) {
       return res.status(400).json({
         success: false,
         message: 'action must be approve or reject'
       })
     }
 
-    if (action === 'reject' && !notes) {
+    const approved = action === 'approve' || action === 'accept'
+
+    if (!approved && !notes) {
       return res.status(400).json({
         success: false,
         message: 'A reason is required when rejecting a request'
@@ -344,25 +226,26 @@ router.post('/:id/review', async (req, res, next) => {
       item.exceptionReviewedByEmail = req.user.email || ''
       item.exceptionReviewedAt = new Date()
       item.exceptionReviewNotes = notes
-      item.status = action === 'approve' ? 'EXCEPTION_APPROVED' : 'EXCEPTION_REJECTED'
+      item.status = approved ? 'EXCEPTION_APPROVED' : 'EXCEPTION_REJECTED'
     } else {
       item.reviewedBy = req.user._id
       item.reviewedByName = req.user.name || ''
       item.reviewedByEmail = req.user.email || ''
       item.reviewedAt = new Date()
       item.reviewNotes = notes
-      item.status = action === 'approve' ? 'APPROVED' : 'REJECTED'
+      item.status = approved ? 'APPROVED' : 'REJECTED'
     }
 
+    item.lastPendingNotifiedAt = null
     await item.save()
 
     try {
-      const actionLabel = action === 'approve' ? 'approved' : 'rejected'
+      const actionLabel = approved ? 'accepted' : 'rejected'
       const type = isExceptionReview
-        ? action === 'approve'
+        ? approved
           ? 'MC_CHECK_EXCEPTION_APPROVED'
           : 'MC_CHECK_EXCEPTION_REJECTED'
-        : action === 'approve'
+        : approved
           ? 'MC_CHECK_APPROVED'
           : 'MC_CHECK_REJECTED'
 
@@ -377,20 +260,8 @@ router.post('/:id/review', async (req, res, next) => {
           type,
           requestId: String(item._id),
           status: item.status,
-          action
-        },
-        emailSubject: `[Amtrix] Check MC ${isExceptionReview ? 'exception ' : ''}${actionLabel} — ${identifierLabel(item)}`,
-        emailText: [
-          `Your Check MC ${isExceptionReview ? 'exception ' : ''}request for ${identifierLabel(item)} was ${actionLabel} by ${req.user.name || 'Compliance'}.`,
-          notes ? `Reason: ${notes}` : '',
-          action === 'approve'
-            ? 'You can now use Request to Add Carrier from your Check MC requests.'
-            : isExceptionReview
-              ? 'This request is closed. No further exception can be submitted.'
-              : 'You can submit a Request Exception with a reason if you want Compliance to review it again.'
-        ]
-          .filter(Boolean)
-          .join('\n')
+          action: approved ? 'approve' : 'reject'
+        }
       })
     } catch (notifyError) {
       console.error('Check MC review notification failed:', notifyError?.message || notifyError)
@@ -399,14 +270,14 @@ router.post('/:id/review', async (req, res, next) => {
     await logActivity({
       req,
       action: isExceptionReview
-        ? action === 'approve'
+        ? approved
           ? 'Check MC Exception Approved'
           : 'Check MC Exception Rejected'
-        : action === 'approve'
+        : approved
           ? 'Check MC Approved'
           : 'Check MC Rejected',
-      description: `${req.user.name || 'Reviewer'} ${action === 'approve' ? 'approved' : 'rejected'} Check MC for ${identifierLabel(item)}`,
-      type: action === 'approve' ? 'success' : 'warning',
+      description: `${req.user.name || 'Reviewer'} ${approved ? 'accepted' : 'rejected'} Check MC for ${identifierLabel(item)}`,
+      type: approved ? 'success' : 'warning',
       module: 'Carriers'
     })
 
@@ -455,6 +326,7 @@ router.post('/:id/exception', async (req, res, next) => {
     item.exceptionReason = reason
     item.exceptionRequestedAt = new Date()
     item.exceptionRequestedBy = req.user._id
+    item.lastPendingNotifiedAt = null
     await item.save()
 
     try {
@@ -468,15 +340,7 @@ router.post('/:id/exception', async (req, res, next) => {
             requestId: String(item._id),
             status: 'EXCEPTION_PENDING'
           },
-          emailSubject: `[Amtrix] Check MC exception — ${identifierLabel(item)}`,
-          emailText: [
-            `An exception was requested after a Check MC rejection for ${identifierLabel(item)}.`,
-            '',
-            `Requested by: ${req.user.name || ''} (${req.user.email || ''})`,
-            `Reason for Exception: ${reason}`,
-            '',
-            'Please review this exception in Amtrix Admin → MC Check Requests.'
-          ].join('\n')
+          ...notifyOptions
         })
       }
     } catch (notifyError) {
@@ -538,19 +402,7 @@ router.post('/:id/add-carrier', async (req, res, next) => {
             requestId: String(item._id),
             status: 'ADD_CARRIER_REQUESTED'
           },
-          emailSubject: `[Amtrix] Request to Add Carrier — ${identifierLabel(item)}`,
-          emailText: [
-            `A Request to Add Carrier was submitted for ${identifierLabel(item)}.`,
-            '',
-            `Requested by: ${req.user.name || ''} (${req.user.email || ''})`,
-            item.mcNo ? `MC No: ${item.mcNo}` : '',
-            item.dotNo ? `DOT Number: ${item.dotNo}` : '',
-            item.equipmentType ? `Equipment Type: ${item.equipmentType}` : '',
-            '',
-            'Open this request in Amtrix Admin → MC Check Requests to complete DOT Gate Prequalification.'
-          ]
-            .filter(Boolean)
-            .join('\n')
+          ...notifyOptions
         })
       }
     } catch (notifyError) {
@@ -562,6 +414,142 @@ router.post('/:id/add-carrier', async (req, res, next) => {
       action: 'Add Carrier Requested',
       description: `${req.user.name || 'A user'} requested to add a carrier for ${identifierLabel(item)}`,
       type: 'info',
+      module: 'Carriers'
+    })
+
+    res.json({ success: true, data: serializeRequest(item) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/revoke', async (req, res, next) => {
+  try {
+    if (!(await canRevokeOrBlockMcCheck(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only department admin, super admin, or compliance head can revoke a Check MC decision'
+      })
+    }
+
+    const item = await McCheckRequest.findById(req.params.id)
+    if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
+    if (!(await canAccessDepartmentItem(req.user, item))) {
+      return res.status(403).json({ success: false, message: 'Request is outside your department' })
+    }
+
+    const currentStatus = String(item.status || '').toUpperCase()
+    const reason = String(req.body?.reason || req.body?.notes || '').trim()
+    let nextStatus = 'PENDING'
+    if (['EXCEPTION_APPROVED', 'EXCEPTION_REJECTED'].includes(currentStatus)) nextStatus = 'EXCEPTION_PENDING'
+    else if (currentStatus === 'CARRIER_ADDED') nextStatus = 'ADD_CARRIER_REQUESTED'
+    else if (currentStatus === 'BLOCKED') nextStatus = item.previousStatus || 'PENDING'
+    else if (['APPROVED', 'REJECTED'].includes(currentStatus)) nextStatus = 'PENDING'
+    else if (currentStatus === 'PENDING' || currentStatus === 'EXCEPTION_PENDING') {
+      return res.status(400).json({ success: false, message: 'There is no decision to revoke on this request' })
+    }
+
+    item.previousStatus = currentStatus
+    item.status = nextStatus
+    item.revokedBy = req.user._id
+    item.revokedByName = req.user.name || ''
+    item.revokedByEmail = req.user.email || ''
+    item.revokedAt = new Date()
+    item.revokeReason = reason
+    item.lastPendingNotifiedAt = null
+    if (currentStatus === 'BLOCKED') {
+      item.blockedBy = null
+      item.blockedByName = ''
+      item.blockedByEmail = ''
+      item.blockedAt = null
+      item.blockReason = ''
+    }
+    await item.save()
+
+    try {
+      await notifyRequester(item, {
+        title: currentStatus === 'BLOCKED' ? 'Check MC unblocked' : 'Check MC decision revoked',
+        message:
+          currentStatus === 'BLOCKED'
+            ? `${identifierLabel(item)} is no longer blocked and can be reviewed again.`
+            : `A previous decision on ${identifierLabel(item)} was revoked. The request is open for review again.`,
+        data: {
+          type: 'MC_CHECK_REVOKED',
+          requestId: String(item._id),
+          status: item.status
+        }
+      })
+    } catch (notifyError) {
+      console.error('Check MC revoke notification failed:', notifyError?.message || notifyError)
+    }
+
+    await logActivity({
+      req,
+      action: currentStatus === 'BLOCKED' ? 'Check MC Unblocked' : 'Check MC Decision Revoked',
+      description: `${req.user.name || 'Admin'} revoked ${identifierLabel(item)} from ${currentStatus} to ${nextStatus}`,
+      type: 'warning',
+      module: 'Carriers'
+    })
+
+    res.json({ success: true, data: serializeRequest(item) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/block', async (req, res, next) => {
+  try {
+    if (!(await canRevokeOrBlockMcCheck(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only department admin, super admin, or compliance head can block an MC'
+      })
+    }
+
+    const item = await McCheckRequest.findById(req.params.id)
+    if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
+    if (!(await canAccessDepartmentItem(req.user, item))) {
+      return res.status(403).json({ success: false, message: 'Request is outside your department' })
+    }
+
+    if (String(item.status).toUpperCase() === 'BLOCKED') {
+      return res.status(400).json({ success: false, message: 'This MC is already blocked' })
+    }
+
+    const reason = String(req.body?.reason || req.body?.notes || '').trim()
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'A reason is required to block an MC' })
+    }
+
+    item.previousStatus = item.status
+    item.status = 'BLOCKED'
+    item.blockedBy = req.user._id
+    item.blockedByName = req.user.name || ''
+    item.blockedByEmail = req.user.email || ''
+    item.blockedAt = new Date()
+    item.blockReason = reason
+    item.lastPendingNotifiedAt = null
+    await item.save()
+
+    try {
+      await notifyRequester(item, {
+        title: 'MC blocked',
+        message: `${identifierLabel(item)} was blocked. ${reason}`,
+        data: {
+          type: 'MC_CHECK_BLOCKED',
+          requestId: String(item._id),
+          status: 'BLOCKED'
+        }
+      })
+    } catch (notifyError) {
+      console.error('Check MC block notification failed:', notifyError?.message || notifyError)
+    }
+
+    await logActivity({
+      req,
+      action: 'MC Blocked',
+      description: `${req.user.name || 'Admin'} blocked ${identifierLabel(item)}`,
+      type: 'warning',
       module: 'Carriers'
     })
 
@@ -609,7 +597,13 @@ router.post('/:id/dot-gate', async (req, res, next) => {
       })
     }
 
+    const preview = getDotGateDummyPreview(
+      { docketType, docketNumber, usDotNumber, intrastateState, intrastateNumber },
+      { name: req.user.name, email: req.user.email }
+    )
+
     item.dotGate = {
+      ...(item.dotGate?.toObject ? item.dotGate.toObject() : item.dotGate || {}),
       docketType,
       docketNumber,
       usDotNumber,
@@ -618,8 +612,70 @@ router.post('/:id/dot-gate', async (req, res, next) => {
       searchedAt: new Date(),
       searchedBy: req.user._id,
       searchedByName: req.user.name || '',
-      searchedByEmail: req.user.email || ''
+      searchedByEmail: req.user.email || '',
+      preview
     }
+    await item.save()
+
+    res.json({
+      success: true,
+      data: {
+        ...serializeRequest(item),
+        preview
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/dot-gate/complete', async (req, res, next) => {
+  try {
+    const allowedReviewer = await canReviewMcCheck(req.user)
+    if (!allowedReviewer) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only compliance team or admins can complete DOT Gate Prequalification'
+      })
+    }
+
+    const item = await McCheckRequest.findById(req.params.id)
+    if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
+    if (!(await canAccessDepartmentItem(req.user, item))) {
+      return res.status(403).json({ success: false, message: 'Request is outside your department' })
+    }
+    if (String(item.status).toUpperCase() !== 'ADD_CARRIER_REQUESTED') {
+      return res.status(400).json({
+        success: false,
+        message: 'DOT Gate Prequalification is only available after Request to Add Carrier'
+      })
+    }
+    if (!item.dotGate?.preview) {
+      return res.status(400).json({
+        success: false,
+        message: 'Search the carrier in DOT Gate before completing the invitation'
+      })
+    }
+
+    const body = req.body || {}
+    const invitation = {
+      carrierName: String(body.carrierName || item.dotGate.preview?.invitation?.carrierName || '').trim(),
+      clientInsuredNumber: String(body.clientInsuredNumber || '').trim(),
+      carrierContact: String(body.carrierContact || item.dotGate.preview?.invitation?.carrierContact || '').trim(),
+      carrierEmail: String(body.carrierEmail || item.dotGate.preview?.invitation?.carrierEmail || '').trim(),
+      requesterName: String(body.requesterName || req.user.name || '').trim(),
+      requesterEmail: String(body.requesterEmail || req.user.email || '').trim(),
+      createdAt: new Date()
+    }
+
+    if (!invitation.carrierName || !invitation.carrierEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Carrier name and carrier email are required to create the invitation'
+      })
+    }
+
+    item.invitation = invitation
     item.status = 'CARRIER_ADDED'
     await item.save()
 
@@ -631,16 +687,7 @@ router.post('/:id/dot-gate', async (req, res, next) => {
           type: 'MC_CHECK_CARRIER_ADDED',
           requestId: String(item._id),
           status: 'CARRIER_ADDED'
-        },
-        emailSubject: `[Amtrix] Carrier add completed — ${identifierLabel(item)}`,
-        emailText: [
-          `DOT Gate Prequalification was completed for ${identifierLabel(item)} by ${req.user.name || 'Compliance'}.`,
-          docketNumber ? `US Docket: ${docketType} ${docketNumber}` : '',
-          usDotNumber ? `US DOT Number: ${usDotNumber}` : '',
-          intrastateNumber ? `Intrastate: ${intrastateState} ${intrastateNumber}` : ''
-        ]
-          .filter(Boolean)
-          .join('\n')
+        }
       })
     } catch (notifyError) {
       console.error('DOT Gate notification failed:', notifyError?.message || notifyError)

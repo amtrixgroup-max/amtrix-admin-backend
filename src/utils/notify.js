@@ -8,7 +8,7 @@ function userIdOf(user) {
   return user
 }
 
-export async function notifyUser({ user, title, message, data, emailSubject, emailText }) {
+export async function notifyUser({ user, title, message, data, emailSubject, emailText, skipEmail = false }) {
   try {
     const userId = userIdOf(user)
     if (!userId || !title || !message) return null
@@ -31,7 +31,7 @@ export async function notifyUser({ user, title, message, data, emailSubject, ema
     })
 
     const email = typeof user === 'object' ? user.email : null
-    if (email) {
+    if (email && !skipEmail) {
       await sendMail({
         to: email,
         subject: emailSubject || title,

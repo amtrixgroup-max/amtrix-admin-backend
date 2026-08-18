@@ -1,16 +1,16 @@
 import express from 'express'
 import { authenticate } from '../middleware/auth.js'
-import Dashboard from '../models/Dashboard.js'
 import ActivityLog from '../models/ActivityLog.js'
 import User from '../models/User.js'
 import { deviceFromUserAgent, serializeActivity } from '../utils/activityLog.js'
+import { buildDashboardPayload } from '../utils/dashboardStats.js'
 
 const router = express.Router()
 router.use(authenticate)
 
 router.get('/', async (req, res, next) => {
   try {
-    const dashboard = (await Dashboard.findOne().lean()) || {}
+    const dashboard = await buildDashboardPayload(req)
 
     const recentActivityDocs = await ActivityLog.find({
       userId: { $exists: true, $ne: null }

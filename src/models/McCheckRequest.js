@@ -33,7 +33,8 @@ const mcCheckRequestSchema = new mongoose.Schema(
         'EXCEPTION_APPROVED',
         'EXCEPTION_REJECTED',
         'ADD_CARRIER_REQUESTED',
-        'CARRIER_ADDED'
+        'CARRIER_ADDED',
+        'BLOCKED'
       ],
       default: 'PENDING'
     },
@@ -72,6 +73,39 @@ const mcCheckRequestSchema = new mongoose.Schema(
       default: null
     },
 
+    lastPendingNotifiedAt: { type: Date, default: null },
+    previousStatus: { type: String, default: '' },
+
+    revokedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    revokedByName: { type: String, default: '' },
+    revokedByEmail: { type: String, default: '' },
+    revokedAt: { type: Date, default: null },
+    revokeReason: { type: String, default: '' },
+
+    blockedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    blockedByName: { type: String, default: '' },
+    blockedByEmail: { type: String, default: '' },
+    blockedAt: { type: Date, default: null },
+    blockReason: { type: String, default: '' },
+
+    invitation: {
+      carrierName: { type: String, default: '' },
+      clientInsuredNumber: { type: String, default: '' },
+      carrierContact: { type: String, default: '' },
+      carrierEmail: { type: String, default: '' },
+      requesterName: { type: String, default: '' },
+      requesterEmail: { type: String, default: '' },
+      createdAt: { type: Date, default: null }
+    },
+
     dotGate: {
       docketType: { type: String, default: '' },
       docketNumber: { type: String, default: '' },
@@ -85,7 +119,8 @@ const mcCheckRequestSchema = new mongoose.Schema(
         default: null
       },
       searchedByName: { type: String, default: '' },
-      searchedByEmail: { type: String, default: '' }
+      searchedByEmail: { type: String, default: '' },
+      preview: { type: mongoose.Schema.Types.Mixed, default: null }
     }
   },
   { timestamps: true }
