@@ -149,7 +149,7 @@ async function syncCustomerFromRequest(request, extras = {}) {
   }
 }
 
-async function notifyReviewOutcome({ item, action, actor, accountsUsers }) {
+async function notifyReviewOutcome({ item, action, actor }) {
   const actionLabel =
     action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'marked as prepaid'
   const typeMap = {
@@ -179,45 +179,34 @@ async function notifyReviewOutcome({ item, action, actor, accountsUsers }) {
   }
 
   const actorId = actor?._id ? String(actor._id) : ''
-  await notifyUsers(accountsUsers, payload)
+  const actorEmail = String(actor?.email || '').trim().toLowerCase()
 
   if (item.requesterId && String(item.requesterId) !== actorId) {
     const requester = await User.findById(item.requesterId).select('-password')
-    const requesterEmail = String(requester?.email || item.requesterEmail || '').toLowerCase()
-    const contactEmail = String(item.contactPersonEmail || '').toLowerCase()
-    if (requesterEmail && requesterEmail !== contactEmail) {
-      if (requester) {
-        await notifyUser({ user: requester, ...payload })
-      } else {
-        await sendMail({
-          to: requesterEmail,
-          subject: payload.emailSubject,
-          text: reviewMessage
-        }).catch((error) => {
-          console.error('Failed to email requester:', error?.message || error)
-        })
-      }
+    if (requester) {
+      await notifyUser({ user: requester, ...payload })
+    } else if (item.requesterEmail) {
+      await sendMail({
+        to: item.requesterEmail,
+        subject: payload.emailSubject,
+        text: reviewMessage
+      }).catch((error) => {
+        console.error('Failed to email requester:', error?.message || error)
+      })
     }
   }
 
-  const customerUser = item.contactPersonEmail
-    ? await User.findOne({ email: String(item.contactPersonEmail).toLowerCase() }).select('-password')
-    : null
-
-  await notifyCustomerContact({
-    email: item.contactPersonEmail,
-    user: customerUser,
-    ...payload
-  })
-
-  if (item.agentEmail && item.agentEmail !== item.contactPersonEmail) {
-    await sendMail({
-      to: item.agentEmail,
-      subject: payload.emailSubject,
-      text: reviewMessage
-    }).catch((error) => {
-      console.error('Failed to email agent:', error?.message || error)
-    })
+  const requesterEmail = String(item.requesterEmail || '').trim().toLowerCase()
+  const contactEmail = String(item.contactPersonEmail || '').trim().toLowerCase()
+  if (contactEmail && contactEmail !== requesterEmail && contactEmail !== actorEmail) {
+    const customerUser = await User.findOne({ email: contactEmail }).select('-password')
+    if (!customerUser || String(customerUser._id) !== actorId) {
+      await notifyCustomerContact({
+        email: item.contactPersonEmail,
+        user: customerUser && String(customerUser._id) !== String(item.requesterId) ? customerUser : null,
+        ...payload
+      })
+    }
   }
 }
 
@@ -573,12 +562,10 @@ router.post('/:id/review', async (req, res, next) => {
     await syncCustomerFromRequest(item)
 
     try {
-      const accountsUsers = await findAccountsUsers(item.departmentId)
       await notifyReviewOutcome({
         item,
         action,
-        actor: req.user,
-        accountsUsers
+        actor: req.user
       })
     } catch (notifyError) {
       console.error('Review notification failed:', notifyError?.message || notifyError)

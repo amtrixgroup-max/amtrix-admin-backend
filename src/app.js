@@ -11,6 +11,7 @@ import onboardingRoutes from './routes/onboarding.js'
 import adminRoutes from './routes/admin.js'
 import notificationsRoutes from './routes/notifications.js'
 import customerApprovalsRoutes from './routes/customerApprovals.js'
+import mcChecksRoutes from './routes/mcChecks.js'
 import accountingRoutes from './routes/accounting.js'
 import loadsRoutes from './routes/loads.js'
 import errorHandler from './middleware/errorHandler.js'
@@ -31,6 +32,7 @@ app.use('/api/settings', settingsRoutes)
 app.use('/api/onboarding', onboardingRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/customer-approvals', customerApprovalsRoutes)
+app.use('/api/mc-checks', mcChecksRoutes)
 app.use('/api/accounting', accountingRoutes)
 app.use('/api/loads', loadsRoutes)
 
