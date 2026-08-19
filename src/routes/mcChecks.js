@@ -5,9 +5,11 @@ import Department from '../models/Department.js'
 import { authenticate } from '../middleware/auth.js'
 import { notifyUser, notifyUsers } from '../utils/notify.js'
 import { logActivity } from '../utils/activityLog.js'
+import { upsertCarrierFromMcCheck } from '../utils/upsertCarrier.js'
 import { getDotGateDummyPreview } from '../data/dotGateDummy.js'
 import {
   canAccessDepartmentItem,
+  canOpenDotGate,
   canReviewMcCheck,
   canRevokeOrBlockMcCheck,
   canSubmitMcCheck,
@@ -499,10 +501,10 @@ router.post('/:id/revoke', async (req, res, next) => {
 
 router.post('/:id/block', async (req, res, next) => {
   try {
-    if (!(await canRevokeOrBlockMcCheck(req.user))) {
+    if (!(await canReviewMcCheck(req.user))) {
       return res.status(403).json({
         success: false,
-        message: 'Only department admin, super admin, or compliance head can block an MC'
+        message: 'Only compliance team or admins can block an MC'
       })
     }
 
@@ -576,10 +578,10 @@ router.post('/:id/dot-gate', async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Request is outside your department' })
     }
 
-    if (String(item.status).toUpperCase() !== 'ADD_CARRIER_REQUESTED') {
+    if (!canOpenDotGate(item.status)) {
       return res.status(400).json({
         success: false,
-        message: 'DOT Gate Prequalification is only available after Request to Add Carrier'
+        message: 'DOT Gate Prequalification is only available after the request is accepted'
       })
     }
 
@@ -644,10 +646,10 @@ router.post('/:id/dot-gate/complete', async (req, res, next) => {
     if (!(await canAccessDepartmentItem(req.user, item))) {
       return res.status(403).json({ success: false, message: 'Request is outside your department' })
     }
-    if (String(item.status).toUpperCase() !== 'ADD_CARRIER_REQUESTED') {
+    if (!canOpenDotGate(item.status)) {
       return res.status(400).json({
         success: false,
-        message: 'DOT Gate Prequalification is only available after Request to Add Carrier'
+        message: 'DOT Gate Prequalification is only available after the request is accepted'
       })
     }
     if (!item.dotGate?.preview) {
@@ -678,6 +680,12 @@ router.post('/:id/dot-gate/complete', async (req, res, next) => {
     item.invitation = invitation
     item.status = 'CARRIER_ADDED'
     await item.save()
+
+    try {
+      await upsertCarrierFromMcCheck(item, invitation, req.user)
+    } catch (carrierError) {
+      console.error('Carrier upsert after DOT Gate failed:', carrierError?.message || carrierError)
+    }
 
     try {
       await notifyRequester(item, {

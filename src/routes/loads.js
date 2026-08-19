@@ -5,6 +5,12 @@ import LoadTemplate from '../models/LoadTemplate.js'
 import LoadSearchReport from '../models/LoadSearchReport.js'
 import { authenticate } from '../middleware/auth.js'
 import { logActivity } from '../utils/activityLog.js'
+import { defaultLoadStops, reeferTemperatureError } from '../utils/loadValidation.js'
+import { defaultLoadDocuments, ensureLoadDocuments } from '../utils/loadDocuments.js'
+import { LOAD_DOCS_UPLOAD_DIR, uploadLoadDocument } from '../middleware/uploadLoadDocs.js'
+import { sendMail } from '../utils/mailer.js'
+import fs from 'fs'
+import path from 'path'
 
 const router = express.Router()
 router.use(authenticate)
@@ -94,9 +100,10 @@ function createLoadDefaults(payload = {}, user = null) {
   const rest = { ...(payload || {}) }
   delete rest._id
   const loadStatus = rest.loadStatus || 'Pending'
+  const id = rest.id || `LD-${Date.now()}`
   return {
     ...rest,
-    id: rest.id || `LD-${Date.now()}`,
+    id,
     tab: rest.tab || tabFromLoadStatus(loadStatus, 'planning'),
     loadStatus,
     truckStatus: rest.truckStatus || '',
@@ -127,12 +134,20 @@ function createLoadDefaults(payload = {}, user = null) {
     goodsCondition: rest.goodsCondition || 'new',
     customerDetails: rest.customerDetails || {},
     carrierDetails: rest.carrierDetails || {},
-    stops: rest.stops || [],
+    temperature: rest.temperature || '',
+    lowerTemp: rest.lowerTemp || '',
+    upperTemp: rest.upperTemp || '',
+    stops: Array.isArray(rest.stops) && rest.stops.length ? rest.stops : defaultLoadStops(),
     incomeLines: rest.incomeLines || [],
     expenseLines: rest.expenseLines || [],
     errorMessage: rest.errorMessage || '',
     archived: Boolean(rest.archived),
     postedBoards: rest.postedBoards || [],
+    documents: Array.isArray(rest.documents) && rest.documents.length ? rest.documents : defaultLoadDocuments(id),
+    paperworkOk: Boolean(rest.paperworkOk),
+    emailHistory: rest.emailHistory || [],
+    documentRequests: rest.documentRequests || [],
+    lastContact: rest.lastContact || '',
   }
 }
 
@@ -306,7 +321,12 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const load = await Load.create(createLoadDefaults(req.body || {}, req.user))
+    const payload = createLoadDefaults(req.body || {}, req.user)
+    const tempError = reeferTemperatureError(payload)
+    if (tempError) {
+      return res.status(400).json({ success: false, message: tempError })
+    }
+    const load = await Load.create(payload)
     await logActivity({
       req,
       action: 'Load Created',
@@ -342,6 +362,10 @@ router.put('/:id', async (req, res, next) => {
     const payload = { ...(req.body || {}) }
     delete payload._id
     payload.id = existing.id
+    const tempError = reeferTemperatureError(payload, existing)
+    if (tempError) {
+      return res.status(400).json({ success: false, message: tempError })
+    }
     if (!payload.tab && payload.loadStatus) {
       payload.tab = tabFromLoadStatus(payload.loadStatus, existing.tab)
     }
@@ -394,6 +418,252 @@ router.delete('/:id', async (req, res, next) => {
     }
     await Load.deleteOne({ _id: existing._id })
     res.json({ success: true, message: 'Load deleted' })
+  } catch (error) {
+    next(error)
+  }
+})
+
+async function findScopedLoad(req) {
+  return Load.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
+}
+
+function serializeDocumentsPayload(load) {
+  return {
+    loadId: load.id,
+    customer: load.customer || '',
+    carrier: load.carrier || '',
+    driver: load.driver || load.carrierDetails?.drivers || '',
+    driverPhone: load.carrierDetails?.phone || '',
+    loadStatus: load.loadStatus || '',
+    paperworkOk: Boolean(load.paperworkOk),
+    documents: load.documents || [],
+    emailHistory: load.emailHistory || [],
+    documentRequests: load.documentRequests || [],
+    lastContact: load.lastContact || '',
+  }
+}
+
+router.get('/:id/documents', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    const before = (load.documents || []).length
+    ensureLoadDocuments(load)
+    if ((load.documents || []).length !== before) await load.save()
+    res.json({ success: true, data: serializeDocumentsPayload(load) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/documents', (req, res, next) => {
+  uploadLoadDocument.single('file')(req, res, async (error) => {
+    if (error) {
+      return res.status(400).json({ success: false, message: error.message || 'Upload failed' })
+    }
+    try {
+      const load = await findScopedLoad(req)
+      if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+      ensureLoadDocuments(load)
+      const body = req.body || {}
+      const file = req.file
+      const document = {
+        id: `DOC-${Date.now()}`,
+        name: String(body.name || file?.originalname || 'Uploaded document').trim(),
+        documentTypes: String(body.documentTypes || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+        description: body.description || '',
+        source: 'Uploaded',
+        defaulted: false,
+        companyDocument: body.companyDocument === 'true' || body.companyDocument === true,
+        status: 'Uploaded',
+        attachedTo: load.id,
+        storedName: file?.filename || '',
+        originalName: file?.originalname || '',
+        mimeType: file?.mimetype || '',
+        size: file?.size || 0,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: req.user.name || req.user.email || '',
+      }
+      load.documents = [...(load.documents || []), document]
+      await load.save()
+      res.status(201).json({ success: true, data: document })
+    } catch (err) {
+      next(err)
+    }
+  })
+})
+
+router.put('/:id/documents/:docId', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    const docs = load.documents || []
+    const index = docs.findIndex((item) => String(item.id) === String(req.params.docId))
+    if (index < 0) return res.status(404).json({ success: false, message: 'Document not found' })
+    const body = req.body || {}
+    const current = typeof docs[index].toObject === 'function' ? docs[index].toObject() : { ...docs[index] }
+    docs[index] = {
+      ...current,
+      name: body.name != null ? String(body.name).trim() : current.name,
+      documentTypes: Array.isArray(body.documentTypes)
+        ? body.documentTypes
+        : body.documentTypes != null
+          ? String(body.documentTypes).split(',').map((item) => item.trim()).filter(Boolean)
+          : current.documentTypes,
+      description: body.description != null ? body.description : current.description,
+      companyDocument: body.companyDocument != null ? Boolean(body.companyDocument) : current.companyDocument,
+    }
+    load.documents = docs
+    await load.save()
+    res.json({ success: true, data: docs[index] })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.delete('/:id/documents/:docId', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    const docs = load.documents || []
+    const doc = docs.find((item) => String(item.id) === String(req.params.docId))
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' })
+    if (doc.storedName) {
+      const filePath = path.join(LOAD_DOCS_UPLOAD_DIR, path.basename(doc.storedName))
+      fs.promises.unlink(filePath).catch(() => {})
+    }
+    load.documents = docs.filter((item) => String(item.id) !== String(req.params.docId))
+    await load.save()
+    res.json({ success: true, message: 'Document deleted' })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/:id/documents/:docId/file', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    const doc = (load.documents || []).find((item) => String(item.id) === String(req.params.docId))
+    if (!doc?.storedName) {
+      return res.status(404).json({ success: false, message: 'No file is attached to this document' })
+    }
+    const filePath = path.join(LOAD_DOCS_UPLOAD_DIR, path.basename(doc.storedName))
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'File not found' })
+    }
+    res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream')
+    res.setHeader('Content-Disposition', `inline; filename="${doc.originalName || doc.name}"`)
+    res.sendFile(filePath)
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/documents/:docId/email', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    const doc = (load.documents || []).find((item) => String(item.id) === String(req.params.docId))
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' })
+    const to = String(req.body?.to || '').trim()
+    if (!to) return res.status(400).json({ success: false, message: 'Recipient email is required' })
+    const subject = String(req.body?.subject || `Load ${load.id} — ${doc.name}`).trim()
+    const message = String(req.body?.message || `Please find ${doc.name} for load ${load.id}.`).trim()
+    await sendMail({ to, subject, text: message })
+    const entry = {
+      id: `EM-${Date.now()}`,
+      to,
+      subject,
+      message,
+      documentId: doc.id,
+      documentName: doc.name,
+      sentAt: new Date().toISOString(),
+      sentBy: req.user.name || req.user.email || '',
+    }
+    load.emailHistory = [...(load.emailHistory || []), entry]
+    await load.save()
+    res.json({ success: true, data: entry })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/paperwork-ok', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    load.paperworkOk = true
+    load.paperworkOkAt = new Date().toISOString()
+    load.paperworkOkBy = req.user.name || req.user.email || ''
+    await load.save()
+    await logActivity({
+      req,
+      action: 'Paperwork Marked OK',
+      description: `Paperwork marked OK for load #${load.id}`,
+      type: 'success',
+      module: 'Loads',
+    })
+    res.json({ success: true, data: serialize(load) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/send-accounting', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    if (!load.paperworkOk) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mark paperwork OK before sending this load to accounting',
+      })
+    }
+    load.tab = 'accounting'
+    load.loadStatus = load.loadStatus?.toLowerCase().includes('invoice') ? load.loadStatus : 'To Be Billed'
+    load.sentToAccountingAt = new Date().toISOString()
+    await load.save()
+    await logActivity({
+      req,
+      action: 'Sent to Accounting',
+      description: `Load #${load.id} sent to accounting`,
+      type: 'info',
+      module: 'Loads',
+    })
+    res.json({ success: true, data: serialize(load) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/document-requests', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : []
+    const valid = recipients.filter((item) => String(item?.name || '').trim() && String(item?.phone || '').trim())
+    if (!valid.length) {
+      return res.status(400).json({ success: false, message: 'Add at least one recipient with a name and phone number' })
+    }
+    const request = {
+      id: `REQ-${Date.now()}`,
+      message: String(req.body?.message || '').trim() || `Please send completed load docs for ${load.id}.`,
+      recipients: valid.map((item) => ({
+        name: String(item.name).trim(),
+        phone: String(item.phone).trim(),
+      })),
+      requestedAt: new Date().toISOString(),
+      requestedBy: req.user.name || req.user.email || '',
+      status: 'Sent',
+    }
+    load.documentRequests = [...(load.documentRequests || []), request]
+    load.lastContact = `Docs requested ${new Date().toLocaleDateString()}`
+    await load.save()
+    res.status(201).json({ success: true, data: request })
   } catch (error) {
     next(error)
   }

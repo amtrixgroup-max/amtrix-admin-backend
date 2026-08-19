@@ -2,6 +2,9 @@ import User from '../models/User.js'
 import Role from '../models/Role.js'
 
 export const PENDING_REVIEW_STATUSES = ['PENDING', 'EXCEPTION_PENDING']
+export const DOT_GATE_STATUSES = ['APPROVED', 'EXCEPTION_APPROVED', 'ADD_CARRIER_REQUESTED']
+
+export const canOpenDotGate = (status) => DOT_GATE_STATUSES.includes(String(status || '').toUpperCase())
 
 export const getRoleMeta = async (user) => {
   if (user?.systemRole === 'SUPER_ADMIN') return { name: 'SUPER_ADMIN', displayName: 'Super Admin' }
@@ -163,7 +166,7 @@ export const serializeRequest = (doc) => {
     id: obj._id,
     canRequestAddCarrier: ['APPROVED', 'EXCEPTION_APPROVED'].includes(status),
     canRequestException: status === 'REJECTED',
-    canShowDotGate: status === 'ADD_CARRIER_REQUESTED',
+    canShowDotGate: canOpenDotGate(status),
     canAccept: PENDING_REVIEW_STATUSES.includes(status),
     canReject: PENDING_REVIEW_STATUSES.includes(status),
     canRevoke: ['APPROVED', 'REJECTED', 'EXCEPTION_APPROVED', 'EXCEPTION_REJECTED', 'CARRIER_ADDED', 'BLOCKED'].includes(
