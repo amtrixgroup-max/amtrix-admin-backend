@@ -63,13 +63,33 @@ router.post('/', async (req, res, next) => {
     const body = req.body || {}
     const mcNo = String(body.mcNo || body.mcNumber || '').trim()
     const dotNo = String(body.dotNo || body.dotNumber || body.dotno || '').trim()
-    const equipmentType = String(body.equipmentType || '').trim()
+    const otherEquipment = String(body.equipmentOther || '').trim()
+    let equipmentType = String(body.equipmentType || '').trim()
+    if (equipmentType.toLowerCase() === 'other') equipmentType = otherEquipment
     const docketType = String(body.docketType || 'MC').trim().toUpperCase() || 'MC'
+    const temperature = String(body.temperature || '').trim()
+    const lowerTemp = String(body.lowerTemp || '').trim()
+    const upperTemp = String(body.upperTemp || '').trim()
+    const tempTolerance = String(body.tempTolerance || '').trim()
 
     if (!mcNo && !dotNo) {
       return res.status(400).json({
         success: false,
         message: 'Please enter MC No or DOT Number. At least one is required.'
+      })
+    }
+
+    if (String(body.equipmentType || '').trim().toLowerCase() === 'other' && !equipmentType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter the equipment type.',
+      })
+    }
+
+    if (equipmentType.toLowerCase().includes('reefer') && !temperature) {
+      return res.status(400).json({
+        success: false,
+        message: 'Temperature is required for Reefer equipment.',
       })
     }
 
@@ -94,6 +114,10 @@ router.post('/', async (req, res, next) => {
       docketType,
       dotNo,
       equipmentType,
+      temperature,
+      lowerTemp,
+      upperTemp,
+      tempTolerance,
       status: 'PENDING'
     })
 

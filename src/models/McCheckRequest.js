@@ -22,6 +22,10 @@ const mcCheckRequestSchema = new mongoose.Schema(
     docketType: { type: String, default: 'MC', trim: true },
     dotNo: { type: String, default: '', trim: true },
     equipmentType: { type: String, default: '', trim: true },
+    temperature: { type: String, default: '', trim: true },
+    lowerTemp: { type: String, default: '', trim: true },
+    upperTemp: { type: String, default: '', trim: true },
+    tempTolerance: { type: String, default: '', trim: true },
 
     status: {
       type: String,

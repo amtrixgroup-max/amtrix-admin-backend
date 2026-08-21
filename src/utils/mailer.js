@@ -22,16 +22,18 @@ function getTransporter() {
   return transporter
 }
 
-export async function sendMail({ to, subject, text, html }) {
+export async function sendMail({ to, subject, text, html, attachments, fromName }) {
   const tx = getTransporter()
   if (!tx || !to) {
     if (!tx) {
       console.warn('SMTP is not configured (SMTP_HOST). Skipping email.')
     }
-    return { skipped: true }
+    return { skipped: true, message: !to ? 'Recipient email is required' : 'Email is not configured on the server.' }
   }
 
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@amtrix.local'
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@amtrix.local'
+  const safeName = String(fromName || '').replace(/["<>]/g, '').trim()
+  const from = safeName ? `"${safeName}" <${fromEmail}>` : fromEmail
 
   try {
     await tx.sendMail({
@@ -39,7 +41,8 @@ export async function sendMail({ to, subject, text, html }) {
       to,
       subject,
       text,
-      html: html || `<p>${String(text || '').replace(/\n/g, '<br/>')}</p>`
+      html: html || `<p>${String(text || '').replace(/\n/g, '<br/>')}</p>`,
+      attachments: attachments || [],
     })
     return { sent: true }
   } catch (error) {

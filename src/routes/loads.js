@@ -5,8 +5,19 @@ import LoadTemplate from '../models/LoadTemplate.js'
 import LoadSearchReport from '../models/LoadSearchReport.js'
 import { authenticate } from '../middleware/auth.js'
 import { logActivity } from '../utils/activityLog.js'
-import { defaultLoadStops, reeferTemperatureError } from '../utils/loadValidation.js'
+import {
+  defaultLoadStops,
+  deriveStopSummary,
+  firstErrorMessage,
+  isPostedLoad,
+  recalculateFinancials,
+  resolvedEquipmentType,
+  validateLoadDraft,
+  validateLoadPost,
+} from '../utils/loadValidation.js'
 import { defaultLoadDocuments, ensureLoadDocuments } from '../utils/loadDocuments.js'
+import { buildLoadDocumentPdf, pdfFilename } from '../utils/loadPdf.js'
+import { upsertLoadBillingRecords } from '../utils/loadBilling.js'
 import { LOAD_DOCS_UPLOAD_DIR, uploadLoadDocument } from '../middleware/uploadLoadDocs.js'
 import { sendMail } from '../utils/mailer.js'
 import fs from 'fs'
@@ -99,8 +110,10 @@ function createLoadDefaults(payload = {}, user = null) {
   const userId = user?._id ? String(user._id) : ''
   const rest = { ...(payload || {}) }
   delete rest._id
+  delete rest.draft
   const loadStatus = rest.loadStatus || 'Pending'
   const id = rest.id || `LD-${Date.now()}`
+  const equipmentType = resolvedEquipmentType(rest)
   return {
     ...rest,
     id,
@@ -110,8 +123,8 @@ function createLoadDefaults(payload = {}, user = null) {
     customer: rest.customer || '',
     carrier: rest.carrier || '',
     driver: rest.driver || '',
-    equipment: rest.equipment || rest.equipmentType || '',
-    equipmentType: rest.equipmentType || rest.equipment || '',
+    equipment: equipmentType,
+    equipmentType,
     equipmentLength: rest.equipmentLength || '',
     powerUnit: rest.powerUnit || '',
     picks: rest.picks || '',
@@ -148,7 +161,64 @@ function createLoadDefaults(payload = {}, user = null) {
     emailHistory: rest.emailHistory || [],
     documentRequests: rest.documentRequests || [],
     lastContact: rest.lastContact || '',
+    isDraft: true,
+    postedAt: null,
+    postedBy: '',
+    updatedBy: userId,
+    quantity: rest.quantity || '',
+    weightUnit: rest.weightUnit || 'lbs',
+    commodityDescription: rest.commodityDescription || '',
   }
+}
+
+function mergeLoadData(existing, payload = {}) {
+  const current = typeof existing.toObject === 'function' ? existing.toObject() : { ...existing }
+  const next = { ...current, ...(payload || {}) }
+  delete next._id
+  delete next.draft
+  next.id = existing.id
+  const money = recalculateFinancials(next, current)
+  const stops = deriveStopSummary(next, current)
+  const equipmentType = resolvedEquipmentType(next)
+  return {
+    ...next,
+    ...money,
+    ...stops,
+    equipment: equipmentType,
+    equipmentType,
+  }
+}
+
+function postedFields(user) {
+  return {
+    isDraft: false,
+    loadStatus: 'Posted Loads',
+    tab: 'externally-posted',
+    errorMessage: '',
+    postedAt: new Date(),
+    postedBy: user?._id ? String(user._id) : '',
+    updatedBy: user?._id ? String(user._id) : '',
+  }
+}
+
+function validationResponse(errors, statusMessage) {
+  return {
+    success: false,
+    message: statusMessage || firstErrorMessage(errors),
+    errors,
+  }
+}
+
+function duplicateLoadResponse() {
+  return {
+    success: false,
+    message: 'A load with this number already exists.',
+    errors: { id: 'A load with this number already exists.' },
+  }
+}
+
+function isDuplicateKeyError(error) {
+  return Boolean(error && (error.code === 11000 || error.code === '11000'))
 }
 
 function matchesBoardSearch(load, query = {}) {
@@ -267,33 +337,64 @@ router.post('/bulk', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'No load ids provided' })
     }
     const scope = userScopeFilter(req.user)
-    const filter = {
-      ...scope,
-      ...(ids.length ? { id: { $in: ids } } : {}),
-    }
-    let set = {}
-    if (action === 'repost') {
-      set = { loadStatus: 'Posted Loads', tab: 'externally-posted', errorMessage: '' }
-    } else if (action === 'unpost') {
-      set = { loadStatus: 'Planning', tab: 'planning' }
-    } else if (action === 'clearErrors') {
-      set = { errorMessage: '' }
-    } else if (action === 'archive') {
-      set = { archived: true, loadStatus: 'Archived', tab: 'misc' }
-    } else if (action === 'cancel') {
-      set = { loadStatus: 'Cancelled', tab: 'misc' }
-    } else if (action === 'update') {
-      set = updates
+    const docs = await Load.find({ ...scope, id: { $in: ids } })
+    const failed = []
+    let postedCount = 0
+    let skippedCount = 0
+
+    if (action === 'post' || action === 'repost') {
+      for (const existing of docs) {
+        if (isPostedLoad(existing)) {
+          skippedCount += 1
+          continue
+        }
+        const merged = mergeLoadData(existing, {})
+        const errors = validateLoadPost(merged, existing)
+        if (Object.keys(errors).length) {
+          existing.errorMessage = firstErrorMessage(errors)
+          await existing.save()
+          failed.push({ id: existing.id, message: existing.errorMessage, errors })
+          continue
+        }
+        Object.assign(existing, merged, postedFields(req.user))
+        ensureLoadDocuments(existing)
+        await existing.save()
+        await upsertLoadBillingRecords(existing)
+        postedCount += 1
+        await logActivity({
+          req,
+          action: 'Load Posted',
+          description: `Load #${existing.id} posted`,
+          type: 'success',
+          module: 'Loads',
+        })
+      }
     } else {
-      return res.status(400).json({ success: false, message: 'Unknown bulk action' })
+      let set = {}
+      if (action === 'unpost') {
+        set = { loadStatus: 'Pending', tab: 'planning', isDraft: true, errorMessage: '' }
+      } else if (action === 'clearErrors') {
+        set = { errorMessage: '' }
+      } else if (action === 'archive') {
+        set = { archived: true, loadStatus: 'Archived', tab: 'misc', isDraft: false }
+      } else if (action === 'cancel') {
+        set = { loadStatus: 'Cancelled', tab: 'misc', isDraft: false }
+      } else if (action === 'update') {
+        set = { ...updates, updatedBy: String(req.user._id) }
+      } else {
+        return res.status(400).json({ success: false, message: 'Unknown bulk action' })
+      }
+      await Load.updateMany({ ...scope, id: { $in: ids } }, { $set: set })
     }
 
-    const result = await Load.updateMany(filter, { $set: set })
     const loads = await Load.find(scope).sort({ createdAt: -1 })
     res.json({
       success: true,
       data: loads.map(serialize),
-      modifiedCount: result.modifiedCount || 0,
+      postedCount,
+      skippedCount,
+      failed,
+      modifiedCount: action === 'post' || action === 'repost' ? postedCount : docs.length,
     })
   } catch (error) {
     next(error)
@@ -322,20 +423,24 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const payload = createLoadDefaults(req.body || {}, req.user)
-    const tempError = reeferTemperatureError(payload)
-    if (tempError) {
-      return res.status(400).json({ success: false, message: tempError })
+    Object.assign(payload, recalculateFinancials(payload), deriveStopSummary(payload))
+    const errors = validateLoadDraft(payload)
+    if (Object.keys(errors).length) {
+      return res.status(400).json(validationResponse(errors))
     }
     const load = await Load.create(payload)
     await logActivity({
       req,
       action: 'Load Created',
-      description: `New load #${load.id} created${load.customer ? ` for ${load.customer}` : ''}`,
+      description: `New load #${load.id} created as draft${load.customer ? ` for ${load.customer}` : ''}`,
       type: 'create',
       module: 'Loads'
     })
     res.status(201).json({ success: true, data: serialize(load) })
   } catch (error) {
+    if (isDuplicateKeyError(error)) {
+      return res.status(409).json(duplicateLoadResponse())
+    }
     next(error)
   }
 })
@@ -359,25 +464,46 @@ router.put('/:id', async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Load not found' })
     }
 
-    const payload = { ...(req.body || {}) }
-    delete payload._id
-    payload.id = existing.id
-    const tempError = reeferTemperatureError(payload, existing)
-    if (tempError) {
-      return res.status(400).json({ success: false, message: tempError })
+    const body = { ...(req.body || {}) }
+    const requestedDraft = body.draft === true || body.isDraft === true
+    delete body.draft
+    delete body.isDraft
+    delete body.postedAt
+    delete body.postedBy
+    const alreadyPosted = isPostedLoad(existing)
+    const payload = mergeLoadData(existing, body)
+    payload.updatedBy = String(req.user._id)
+    const terminalStatus = /cancel|archiv|complet/i.test(String(payload.loadStatus || ''))
+
+    if (alreadyPosted) {
+      payload.isDraft = false
+      payload.postedAt = existing.postedAt
+      payload.postedBy = existing.postedBy
+    } else if (terminalStatus) {
+      payload.isDraft = false
+      payload.postedAt = null
+      payload.postedBy = ''
+    } else {
+      payload.isDraft = true
+      payload.postedAt = null
+      payload.postedBy = ''
+      if (String(payload.loadStatus || '').toLowerCase().includes('post')) {
+        const previous = String(existing.loadStatus || '')
+        payload.loadStatus = previous.toLowerCase().includes('post') ? 'Pending' : (previous || 'Pending')
+        payload.tab = tabFromLoadStatus(payload.loadStatus, 'planning')
+      }
     }
+
+    const errors = alreadyPosted
+      ? validateLoadPost(payload, existing)
+      : validateLoadDraft(payload, existing)
+    if (Object.keys(errors).length) {
+      return res.status(400).json(validationResponse(errors))
+    }
+
+    const draftSave = requestedDraft && !alreadyPosted
     if (!payload.tab && payload.loadStatus) {
       payload.tab = tabFromLoadStatus(payload.loadStatus, existing.tab)
-    }
-    if (payload.incomeLines || payload.expenseLines) {
-      payload.income = (payload.incomeLines || existing.incomeLines || []).reduce(
-        (sum, line) => sum + Number(line.rate || 0) * Number(line.quantity || 0),
-        payload.income || 0,
-      )
-      payload.expenses = (payload.expenseLines || existing.expenseLines || []).reduce(
-        (sum, line) => sum + Number(line.rate || 0) * Number(line.quantity || 0),
-        payload.expenses || 0,
-      )
     }
 
     const load = await Load.findByIdAndUpdate(existing._id, { $set: payload }, { new: true })
@@ -403,7 +529,60 @@ router.put('/:id', async (req, res, next) => {
         type,
         module: 'Loads'
       })
+    } else if (draftSave) {
+      await logActivity({
+        req,
+        action: 'Draft Saved',
+        description: `Draft saved for load #${load.id}`,
+        type: 'update',
+        module: 'Loads',
+      })
     }
+    res.json({ success: true, data: serialize(load) })
+  } catch (error) {
+    if (isDuplicateKeyError(error)) {
+      return res.status(409).json(duplicateLoadResponse())
+    }
+    next(error)
+  }
+})
+
+router.post('/:id/post', async (req, res, next) => {
+  try {
+    const existing = await Load.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Load not found' })
+    }
+    if (isPostedLoad(existing)) {
+      return res.status(409).json(validationResponse(
+        { loadStatus: 'This load is already posted.' },
+        'This load is already posted.',
+      ))
+    }
+
+    const body = { ...(req.body || {}) }
+    delete body.draft
+    delete body.isDraft
+    delete body.postedAt
+    delete body.postedBy
+    delete body._id
+    const payload = mergeLoadData(existing, body)
+    const errors = validateLoadPost(payload, existing)
+    if (Object.keys(errors).length) {
+      return res.status(400).json(validationResponse(errors))
+    }
+
+    Object.assign(existing, payload, postedFields(req.user))
+    ensureLoadDocuments(existing)
+    const load = await existing.save()
+    await upsertLoadBillingRecords(load)
+    await logActivity({
+      req,
+      action: 'Load Posted',
+      description: `Load #${load.id} posted${load.customer ? ` for ${load.customer}` : ''}`,
+      type: 'success',
+      module: 'Loads',
+    })
     res.json({ success: true, data: serialize(load) })
   } catch (error) {
     next(error)
@@ -428,12 +607,18 @@ async function findScopedLoad(req) {
 }
 
 function serializeDocumentsPayload(load) {
+  const details = load.customerDetails || {}
+  const carrier = load.carrierDetails || {}
   return {
     loadId: load.id,
     customer: load.customer || '',
     carrier: load.carrier || '',
-    driver: load.driver || load.carrierDetails?.drivers || '',
-    driverPhone: load.carrierDetails?.phone || '',
+    driver: load.driver || carrier.drivers || '',
+    driverPhone: carrier.phone || '',
+    customerEmail: details.contactEmail || details.email || '',
+    customerContact: details.contactName || details.contact || '',
+    carrierEmail: carrier.email || carrier.contactEmail || '',
+    carrierContact: carrier.contactName || carrier.contact || load.carrier || '',
     loadStatus: load.loadStatus || '',
     paperworkOk: Boolean(load.paperworkOk),
     documents: load.documents || [],
@@ -443,13 +628,36 @@ function serializeDocumentsPayload(load) {
   }
 }
 
+async function resolveDocumentFile(load, doc) {
+  if (doc.storedName) {
+    const filePath = path.join(LOAD_DOCS_UPLOAD_DIR, path.basename(doc.storedName))
+    if (fs.existsSync(filePath)) {
+      return {
+        buffer: await fs.promises.readFile(filePath),
+        mimeType: doc.mimeType || 'application/octet-stream',
+        filename: doc.originalName || doc.name || 'document',
+      }
+    }
+    if (doc.source === 'Uploaded' || doc.defaulted === false) return null
+  }
+  const buffer = await buildLoadDocumentPdf(load, doc)
+  return {
+    buffer,
+    mimeType: 'application/pdf',
+    filename: pdfFilename(doc, load),
+  }
+}
+
 router.get('/:id/documents', async (req, res, next) => {
   try {
     const load = await findScopedLoad(req)
     if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
-    const before = (load.documents || []).length
+    const beforeCount = (load.documents || []).length
     ensureLoadDocuments(load)
-    if ((load.documents || []).length !== before) await load.save()
+    if (load.isModified?.('documents') || (load.documents || []).length !== beforeCount) {
+      load.markModified?.('documents')
+      await load.save()
+    }
     res.json({ success: true, data: serializeDocumentsPayload(load) })
   } catch (error) {
     next(error)
@@ -547,17 +755,18 @@ router.get('/:id/documents/:docId/file', async (req, res, next) => {
   try {
     const load = await findScopedLoad(req)
     if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    ensureLoadDocuments(load)
     const doc = (load.documents || []).find((item) => String(item.id) === String(req.params.docId))
-    if (!doc?.storedName) {
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' })
+    const file = await resolveDocumentFile(load, doc)
+    if (!file) {
       return res.status(404).json({ success: false, message: 'No file is attached to this document' })
     }
-    const filePath = path.join(LOAD_DOCS_UPLOAD_DIR, path.basename(doc.storedName))
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, message: 'File not found' })
-    }
-    res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream')
-    res.setHeader('Content-Disposition', `inline; filename="${doc.originalName || doc.name}"`)
-    res.sendFile(filePath)
+    res.setHeader('Content-Type', file.mimeType)
+    res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`)
+    res.setHeader('Cache-Control', 'private, no-store')
+    res.setHeader('Content-Length', String(file.buffer.length))
+    res.end(file.buffer)
   } catch (error) {
     next(error)
   }
@@ -567,25 +776,84 @@ router.post('/:id/documents/:docId/email', async (req, res, next) => {
   try {
     const load = await findScopedLoad(req)
     if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
-    const doc = (load.documents || []).find((item) => String(item.id) === String(req.params.docId))
-    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' })
-    const to = String(req.body?.to || '').trim()
+    ensureLoadDocuments(load)
+    const extraIds = Array.isArray(req.body?.documentIds) ? req.body.documentIds.map(String) : []
+    const docIds = [...new Set([String(req.params.docId), ...extraIds].filter(Boolean))]
+    const docs = (load.documents || []).filter((item) => docIds.includes(String(item.id)))
+    if (!docs.length) return res.status(404).json({ success: false, message: 'Document not found' })
+
+    const recipientRows = Array.isArray(req.body?.recipients) ? req.body.recipients : []
+    const toFromRows = recipientRows
+      .filter((row) => row && row.send !== false && String(row.email || '').trim())
+      .map((row) => String(row.email).trim())
+    const to = toFromRows.length
+      ? toFromRows.join(', ')
+      : String(req.body?.to || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .join(', ')
     if (!to) return res.status(400).json({ success: false, message: 'Recipient email is required' })
-    const subject = String(req.body?.subject || `Load ${load.id} — ${doc.name}`).trim()
-    const message = String(req.body?.message || `Please find ${doc.name} for load ${load.id}.`).trim()
-    await sendMail({ to, subject, text: message })
+
+    const company = 'AP FREIGHT INC'
+    const subject = String(req.body?.subject || `Document(s) from ${company}`).trim()
+    const attachedNames = docs.map((doc) => doc.name).join('\n')
+    const message = String(
+      req.body?.message ||
+        `Hello!\n\nPlease respond to this email if you do not receive, are unable to open, or have any questions about the attached file(s).\n\nAttached Documents:\n${attachedNames}\n\nThanks,\n${company}`,
+    ).trim()
+
+    const attachments = []
+    for (const doc of docs) {
+      const file = await resolveDocumentFile(load, doc)
+      if (file) {
+        attachments.push({
+          filename: file.filename,
+          content: file.buffer,
+          contentType: file.mimeType || 'application/pdf',
+        })
+      }
+    }
+    if (!attachments.length) {
+      return res.status(400).json({ success: false, message: 'No PDF could be generated for the selected documents.' })
+    }
+
+    const senderName = req.user.name || req.user.email || 'AP Freight'
+    const result = await sendMail({
+      to,
+      subject,
+      text: message,
+      attachments,
+      fromName: `${senderName} (${company})`,
+    })
+    if (result.skipped || result.sent === false) {
+      return res.status(502).json({
+        success: false,
+        message: result.message || result.error || 'Unable to send this email.',
+      })
+    }
+
     const entry = {
       id: `EM-${Date.now()}`,
       to,
       subject,
       message,
-      documentId: doc.id,
-      documentName: doc.name,
+      documentId: docs[0].id,
+      documentIds: docs.map((doc) => doc.id),
+      documentName: docs.map((doc) => doc.name).join(', '),
       sentAt: new Date().toISOString(),
-      sentBy: req.user.name || req.user.email || '',
+      sentBy: senderName,
     }
     load.emailHistory = [...(load.emailHistory || []), entry]
+    load.lastContact = `Emailed ${new Date().toLocaleDateString()}`
     await load.save()
+    await logActivity({
+      req,
+      action: 'Document Emailed',
+      description: `${entry.documentName} emailed for load #${load.id} to ${to}`,
+      type: 'info',
+      module: 'Loads',
+    })
     res.json({ success: true, data: entry })
   } catch (error) {
     next(error)
@@ -626,7 +894,9 @@ router.post('/:id/send-accounting', async (req, res, next) => {
     load.tab = 'accounting'
     load.loadStatus = load.loadStatus?.toLowerCase().includes('invoice') ? load.loadStatus : 'To Be Billed'
     load.sentToAccountingAt = new Date().toISOString()
+    ensureLoadDocuments(load)
     await load.save()
+    await upsertLoadBillingRecords(load)
     await logActivity({
       req,
       action: 'Sent to Accounting',

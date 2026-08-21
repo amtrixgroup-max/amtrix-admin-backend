@@ -65,11 +65,22 @@ function customerFromRequest(request) {
 
 async function findCustomerByParam(rawId) {
   if (rawId == null || rawId === '') return null
-  let customer = await Customer.findOne({ id: rawId })
-  if (!customer && /^[a-f\d]{24}$/i.test(String(rawId))) {
-    customer = await Customer.findById(rawId)
+  const id = String(rawId).trim()
+  const clauses = [{ id }]
+  if (/^\d+$/.test(id)) clauses.push({ id: Number(id) })
+  if (/^[a-f\d]{24}$/i.test(id)) clauses.push({ _id: id })
+  return Customer.findOne({ $or: clauses })
+}
+
+async function findApprovalRequestByParam(rawId) {
+  if (rawId == null || rawId === '') return null
+  const id = String(rawId).trim()
+  const clauses = [{ customerId: id }]
+  if (/^\d+$/.test(id)) clauses.push({ customerId: Number(id) })
+  if (/^[a-f\d]{24}$/i.test(id)) {
+    clauses.push({ _id: id }, { customerId: id })
   }
-  return customer
+  return CustomerApprovalRequest.findOne({ $or: clauses })
 }
 
 router.get('/', async (req, res, next) => {
@@ -143,10 +154,14 @@ router.get('/search', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const customer = await findCustomerByParam(req.params.id)
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' })
+    if (customer) {
+      return res.json(serializeCustomer(customer))
     }
-    res.json(serializeCustomer(customer))
+    const request = await findApprovalRequestByParam(req.params.id)
+    if (request) {
+      return res.json(customerFromRequest(request))
+    }
+    return res.status(404).json({ error: 'Customer not found' })
   } catch (error) {
     next(error)
   }
