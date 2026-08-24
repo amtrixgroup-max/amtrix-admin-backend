@@ -69,6 +69,17 @@ const customerApprovalRequestSchema = new mongoose.Schema(
         size: Number,
         uploadedAt: { type: Date, default: Date.now }
       }
+    ],
+    reviewHistory: [
+      {
+        action: { type: String, default: '' },
+        actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        actorName: { type: String, default: '' },
+        actorEmail: { type: String, default: '' },
+        notes: { type: String, default: '' },
+        creditLimit: { type: Number, default: null },
+        at: { type: Date, default: Date.now }
+      }
     ]
   },
   { timestamps: true }

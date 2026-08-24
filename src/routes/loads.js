@@ -20,6 +20,9 @@ import { buildLoadDocumentPdf, pdfFilename } from '../utils/loadPdf.js'
 import { upsertLoadBillingRecords } from '../utils/loadBilling.js'
 import { LOAD_DOCS_UPLOAD_DIR, uploadLoadDocument } from '../middleware/uploadLoadDocs.js'
 import { sendMail } from '../utils/mailer.js'
+import CprRequest from '../models/CprRequest.js'
+import Department from '../models/Department.js'
+import { cprSummaryFromRequest, notifyCprReviewers } from '../utils/cpr.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -161,6 +164,12 @@ function createLoadDefaults(payload = {}, user = null) {
     emailHistory: rest.emailHistory || [],
     documentRequests: rest.documentRequests || [],
     lastContact: rest.lastContact || '',
+    cprStatus: rest.cprStatus || 'NONE',
+    cprRequestId: rest.cprRequestId || null,
+    cprRequestedAt: rest.cprRequestedAt || null,
+    cprApprovedAt: rest.cprApprovedAt || null,
+    cprReviewedAt: rest.cprReviewedAt || null,
+    cprReviewedByName: rest.cprReviewedByName || '',
     isDraft: true,
     postedAt: null,
     postedBy: '',
@@ -606,9 +615,10 @@ async function findScopedLoad(req) {
   return Load.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
 }
 
-function serializeDocumentsPayload(load) {
+function serializeDocumentsPayload(load, cpr = null) {
   const details = load.customerDetails || {}
   const carrier = load.carrierDetails || {}
+  const cprRequest = cprSummaryFromRequest(cpr, load)
   return {
     loadId: load.id,
     customer: load.customer || '',
@@ -625,7 +635,23 @@ function serializeDocumentsPayload(load) {
     emailHistory: load.emailHistory || [],
     documentRequests: load.documentRequests || [],
     lastContact: load.lastContact || '',
+    cprStatus: cprRequest.status || 'NONE',
+    cprRequest,
   }
+}
+
+async function latestCprForLoad(load, paramId) {
+  const ids = [
+    paramId,
+    load?.id,
+    typeof load?.get === 'function' ? load.get('id') : null,
+    load?._id,
+  ]
+    .map((value) => (value == null ? '' : String(value).trim()))
+    .filter(Boolean)
+  const unique = [...new Set(ids)]
+  if (!unique.length) return null
+  return CprRequest.findOne({ loadId: { $in: unique } }).sort({ updatedAt: -1, createdAt: -1 })
 }
 
 async function resolveDocumentFile(load, doc) {
@@ -658,7 +684,8 @@ router.get('/:id/documents', async (req, res, next) => {
       load.markModified?.('documents')
       await load.save()
     }
-    res.json({ success: true, data: serializeDocumentsPayload(load) })
+    const cpr = await latestCprForLoad(load, req.params.id)
+    res.json({ success: true, data: serializeDocumentsPayload(load, cpr) })
   } catch (error) {
     next(error)
   }
@@ -781,6 +808,16 @@ router.post('/:id/documents/:docId/email', async (req, res, next) => {
     const docIds = [...new Set([String(req.params.docId), ...extraIds].filter(Boolean))]
     const docs = (load.documents || []).filter((item) => docIds.includes(String(item.id)))
     if (!docs.length) return res.status(404).json({ success: false, message: 'Document not found' })
+
+    if (String(load.cprStatus || '').toUpperCase() !== 'APPROVED') {
+      const cpr = await latestCprForLoad(load, req.params.id)
+      if (String(cpr?.status || '').toUpperCase() !== 'APPROVED') {
+        return res.status(403).json({
+          success: false,
+          message: 'Email documents is available after the CPR request is approved.',
+        })
+      }
+    }
 
     const recipientRows = Array.isArray(req.body?.recipients) ? req.body.recipients : []
     const toFromRows = recipientRows
@@ -934,6 +971,85 @@ router.post('/:id/document-requests', async (req, res, next) => {
     load.lastContact = `Docs requested ${new Date().toLocaleDateString()}`
     await load.save()
     res.status(201).json({ success: true, data: request })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/:id/cpr-request', async (req, res, next) => {
+  try {
+    const load = await findScopedLoad(req)
+    if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+
+    const currentStatus = String(load.cprStatus || 'NONE').toUpperCase()
+    if (currentStatus === 'PENDING') {
+      return res.status(400).json({ success: false, message: 'A CPR request is already pending for this load.' })
+    }
+    if (currentStatus === 'APPROVED') {
+      return res.status(400).json({ success: false, message: 'CPR is already approved for this load.' })
+    }
+
+    const pending = await CprRequest.findOne({ loadId: load.id, status: 'PENDING' })
+    if (pending) {
+      return res.status(400).json({ success: false, message: 'A CPR request is already pending for this load.' })
+    }
+
+    let departmentName = ''
+    let departmentCode = load.departmentCode || req.user.department || ''
+    if (req.user.departmentId) {
+      const department = await Department.findById(req.user.departmentId).lean()
+      departmentName = department?.displayName || department?.name || ''
+      departmentCode = department?.code || departmentCode
+    }
+
+    const documentNames = (load.documents || []).map((doc) => doc.name).filter(Boolean)
+    const notes = String(req.body?.notes || '').trim()
+    const request = await CprRequest.create({
+      loadId: load.id,
+      loadMongoId: load._id,
+      customer: load.customer || '',
+      carrier: load.carrier || '',
+      documentNames,
+      requesterId: req.user._id,
+      requesterName: req.user.name || '',
+      requesterEmail: req.user.email || '',
+      departmentId: req.user.departmentId || null,
+      departmentCode,
+      departmentName,
+      status: 'PENDING',
+      notes,
+    })
+
+    load.cprStatus = 'PENDING'
+    load.cprRequestId = request._id
+    load.cprRequestedAt = request.createdAt
+    load.cprReviewedAt = null
+    load.cprApprovedAt = null
+    load.cprReviewedByName = ''
+    await load.save()
+
+    try {
+      await notifyCprReviewers(request, req.user)
+    } catch (notifyError) {
+      console.error('CPR submit notification failed:', notifyError?.message || notifyError)
+    }
+
+    await logActivity({
+      req,
+      action: 'CPR Requested',
+      description: `${req.user.name || 'A user'} requested CPR approval for load ${load.id}`,
+      type: 'info',
+      module: 'Loads',
+    })
+
+    res.status(201).json({
+      success: true,
+      data: {
+        requestId: request._id,
+        ...cprSummaryFromRequest(request, load),
+        status: 'PENDING',
+      },
+    })
   } catch (error) {
     next(error)
   }

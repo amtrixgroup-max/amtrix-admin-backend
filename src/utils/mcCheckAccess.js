@@ -2,7 +2,8 @@ import User from '../models/User.js'
 import Role from '../models/Role.js'
 
 export const PENDING_REVIEW_STATUSES = ['PENDING', 'EXCEPTION_PENDING']
-export const DOT_GATE_STATUSES = ['APPROVED', 'EXCEPTION_APPROVED', 'ADD_CARRIER_REQUESTED']
+export const DOT_GATE_STATUSES = ['ADD_CARRIER_REQUESTED']
+export const ADMIN_MC_APPROVED_STATUSES = ['APPROVED', 'EXCEPTION_APPROVED', 'ADD_CARRIER_REQUESTED', 'CARRIER_ADDED']
 
 export const canOpenDotGate = (status) => DOT_GATE_STATUSES.includes(String(status || '').toUpperCase())
 
@@ -77,6 +78,37 @@ export const canRevokeOrBlockMcCheck = async (user) => {
   return isComplianceHead(user)
 }
 
+export const isAdminMcPreviewRole = async (user) => {
+  if (!user) return false
+  return isElevatedAdmin(user)
+}
+
+export const canAcceptRejectMcCheckStatus = async (user, status) => {
+  const current = String(status || '').toUpperCase()
+  if (await isComplianceUser(user)) return PENDING_REVIEW_STATUSES.includes(current)
+  if (await isElevatedAdmin(user)) return current === 'EXCEPTION_PENDING'
+  return false
+}
+
+export const canRevokeMcCheckStatus = async (user, status) => {
+  const current = String(status || '').toUpperCase()
+  if (!(await canRevokeOrBlockMcCheck(user))) return false
+  if (await isElevatedAdmin(user)) {
+    return [...ADMIN_MC_APPROVED_STATUSES, 'BLOCKED'].includes(current)
+  }
+  return ['APPROVED', 'REJECTED', 'EXCEPTION_APPROVED', 'EXCEPTION_REJECTED', 'CARRIER_ADDED', 'ADD_CARRIER_REQUESTED', 'BLOCKED'].includes(
+    current,
+  )
+}
+
+export const canBlockMcCheckStatus = async (user, status) => {
+  const current = String(status || '').toUpperCase()
+  if (current === 'BLOCKED') return false
+  if (await isComplianceUser(user)) return true
+  if (await isElevatedAdmin(user)) return ADMIN_MC_APPROVED_STATUSES.includes(current)
+  return false
+}
+
 export const canSeeAllDepartments = (user) => isSuperAdminUser(user)
 
 export const departmentFilterForViewer = (user) => {
@@ -143,13 +175,22 @@ export const findSuperAdminUsers = async () =>
     $or: [{ systemRole: 'SUPER_ADMIN' }, { role: 'SUPER_ADMIN' }],
   }).select('-password')
 
+export const findAdminUsers = async () =>
+  User.find({
+    ...activeUserFilter,
+    $or: [{ systemRole: 'ADMIN' }, { role: 'ADMIN' }],
+  })
+    .populate('roleId', 'name displayName')
+    .select('-password')
+
 export const findPendingReviewRecipients = async (departmentId) => {
-  const [compliance, superAdmins] = await Promise.all([
+  const [compliance, admins, superAdmins] = await Promise.all([
     findComplianceUsers(departmentId),
+    findAdminUsers(),
     findSuperAdminUsers(),
   ])
   const seen = new Set()
-  return [...compliance, ...superAdmins].filter((user) => {
+  return [...compliance, ...admins, ...superAdmins].filter((user) => {
     const id = String(user?._id || '')
     if (!id || seen.has(id)) return false
     seen.add(id)

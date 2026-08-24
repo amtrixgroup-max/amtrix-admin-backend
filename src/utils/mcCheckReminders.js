@@ -6,6 +6,15 @@ import {
   identifierLabel,
 } from './mcCheckAccess.js'
 
+function formatWaitingDuration(minutes) {
+  const mins = Math.max(0, Math.floor(Number(minutes) || 0))
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'}`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'}`
+  const days = Math.floor(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'}`
+}
+
 const FIVE_MINUTES_MS = 5 * 60 * 1000
 const CHECK_INTERVAL_MS = 30 * 1000
 
@@ -36,7 +45,7 @@ export async function sendPendingMcCheckReminders() {
         const minutesPending = Math.max(5, Math.floor((now - new Date(startedAt).getTime()) / 60000))
         await notifyUsers(recipients, {
           title: 'Check MC still pending review',
-          message: `${identifierLabel(item)} has been waiting for review for ${minutesPending} minute(s).`,
+          message: `${identifierLabel(item)} has been waiting for review for ${formatWaitingDuration(minutesPending)}.`,
           data: {
             type: 'MC_CHECK_PENDING_REMINDER',
             requestId: String(item._id),

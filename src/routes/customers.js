@@ -25,10 +25,13 @@ const isAccountsUser = async (user) => {
 function serializeCustomer(doc) {
   if (!doc) return null
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc }
+  const raw = String(obj.approvalStatus || obj.status || 'APPROVED').toUpperCase()
+  const approvalStatus = raw === 'ACTIVE' ? 'APPROVED' : raw
   return {
     ...obj,
     id: obj.id ?? obj._id,
-    approvalStatus: obj.approvalStatus || obj.status || 'ACTIVE'
+    status: approvalStatus,
+    approvalStatus,
   }
 }
 

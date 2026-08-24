@@ -9,13 +9,16 @@ import { upsertCarrierFromMcCheck } from '../utils/upsertCarrier.js'
 import { getDotGateDummyPreview } from '../data/dotGateDummy.js'
 import {
   canAccessDepartmentItem,
+  canAcceptRejectMcCheckStatus,
+  canBlockMcCheckStatus,
   canOpenDotGate,
   canReviewMcCheck,
+  canRevokeMcCheckStatus,
   canRevokeOrBlockMcCheck,
   canSubmitMcCheck,
   canViewRequest,
   departmentFilterForViewer,
-  findComplianceUsers,
+  findPendingReviewRecipients,
   identifierLabel,
   isComplianceUser,
   isElevatedAdmin,
@@ -122,7 +125,7 @@ router.post('/', async (req, res, next) => {
     })
 
     try {
-      const recipients = await findComplianceUsers(req.user.departmentId)
+      const recipients = await findPendingReviewRecipients(req.user.departmentId)
       if (recipients.length) {
         await notifyUsers(recipients, {
           title: 'New Check MC request',
@@ -246,6 +249,13 @@ router.post('/:id/review', async (req, res, next) => {
       })
     }
 
+    if (!(await canAcceptRejectMcCheckStatus(req.user, currentStatus))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admins can only accept or reject after an exception is requested'
+      })
+    }
+
     if (isExceptionReview) {
       item.exceptionReviewedBy = req.user._id
       item.exceptionReviewedByName = req.user.name || ''
@@ -356,7 +366,7 @@ router.post('/:id/exception', async (req, res, next) => {
     await item.save()
 
     try {
-      const recipients = await findComplianceUsers(item.departmentId)
+      const recipients = await findPendingReviewRecipients(item.departmentId)
       if (recipients.length) {
         await notifyUsers(recipients, {
           title: 'Check MC exception requested',
@@ -418,7 +428,7 @@ router.post('/:id/add-carrier', async (req, res, next) => {
     await item.save()
 
     try {
-      const recipients = await findComplianceUsers(item.departmentId)
+      const recipients = await findPendingReviewRecipients(item.departmentId)
       if (recipients.length) {
         await notifyUsers(recipients, {
           title: 'Request to Add Carrier',
@@ -465,6 +475,12 @@ router.post('/:id/revoke', async (req, res, next) => {
     }
 
     const currentStatus = String(item.status || '').toUpperCase()
+    if (!(await canRevokeMcCheckStatus(req.user, currentStatus))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admins can only revoke or unblock an approved MC check'
+      })
+    }
     const reason = String(req.body?.reason || req.body?.notes || '').trim()
     let nextStatus = 'PENDING'
     if (['EXCEPTION_APPROVED', 'EXCEPTION_REJECTED'].includes(currentStatus)) nextStatus = 'EXCEPTION_PENDING'
@@ -542,6 +558,13 @@ router.post('/:id/block', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'This MC is already blocked' })
     }
 
+    if (!(await canBlockMcCheckStatus(req.user, item.status))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admins can only block an approved MC check'
+      })
+    }
+
     const reason = String(req.body?.reason || req.body?.notes || '').trim()
     if (!reason) {
       return res.status(400).json({ success: false, message: 'A reason is required to block an MC' })
@@ -588,10 +611,10 @@ router.post('/:id/block', async (req, res, next) => {
 router.post('/:id/dot-gate', async (req, res, next) => {
   try {
     const allowedReviewer = await canReviewMcCheck(req.user)
-    if (!allowedReviewer) {
+    if (!allowedReviewer || (await isElevatedAdmin(req.user))) {
       return res.status(403).json({
         success: false,
-        message: 'Only compliance team or admins can submit DOT Gate Prequalification'
+        message: 'Only compliance team can submit DOT Gate Prequalification'
       })
     }
 
@@ -658,10 +681,10 @@ router.post('/:id/dot-gate', async (req, res, next) => {
 router.post('/:id/dot-gate/complete', async (req, res, next) => {
   try {
     const allowedReviewer = await canReviewMcCheck(req.user)
-    if (!allowedReviewer) {
+    if (!allowedReviewer || (await isElevatedAdmin(req.user))) {
       return res.status(403).json({
         success: false,
-        message: 'Only compliance team or admins can complete DOT Gate Prequalification'
+        message: 'Only compliance team can complete DOT Gate Prequalification'
       })
     }
 

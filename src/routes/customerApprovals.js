@@ -9,6 +9,7 @@ import { sendMail } from '../utils/mailer.js'
 import { logActivity } from '../utils/activityLog.js'
 import Customer from '../models/Customer.js'
 import { uploadPrepaidPdfs, PREPAID_UPLOAD_DIR } from '../middleware/uploadPrepaid.js'
+import { isComplianceUser } from '../utils/mcCheckAccess.js'
 import path from 'path'
 import fs from 'fs'
 
@@ -50,9 +51,18 @@ const isAccountsUser = async (user) => {
 
 const canReviewApprovals = async (user) => {
   if (!user) return false
-  if (await isElevatedAdmin(user)) return true
   return isAccountsUser(user)
 }
+
+const canViewApprovalsList = async (user) => {
+  if (!user) return false
+  if (await isElevatedAdmin(user)) return true
+  if (await isAccountsUser(user)) return true
+  if (await isComplianceUser(user)) return true
+  return Boolean(user.departmentId)
+}
+
+const canRemoveApproval = async (user) => isAccountsUser(user)
 
 const canSubmitApproval = async (user) => {
   if (!user?.departmentId) return false
@@ -109,13 +119,57 @@ const findAccountsUsers = async (departmentId) => {
   })
 }
 
+const fallbackReviewHistory = (obj) => {
+  const rows = []
+  if (obj.reviewedAt || obj.reviewedByName) {
+    const status = String(obj.status || '').toUpperCase()
+    const action = status === 'APPROVED' ? 'APPROVED' : 'REJECTED'
+    rows.push({
+      action,
+      actorName: obj.reviewedByName || '',
+      actorEmail: obj.reviewedByEmail || '',
+      notes: obj.reviewNotes || '',
+      creditLimit: obj.approvedCredit ?? null,
+      at: obj.reviewedAt || obj.updatedAt || null,
+    })
+  }
+  if (obj.prepaidRequestedAt || obj.prepaidRequestedByName) {
+    rows.push({
+      action: 'PREPAID_SUBMITTED',
+      actorName: obj.prepaidRequestedByName || '',
+      actorEmail: obj.prepaidRequestedByEmail || '',
+      notes: obj.prepaidNotes || '',
+      creditLimit: obj.prepaidCreditRequired ?? null,
+      at: obj.prepaidRequestedAt || null,
+    })
+  }
+  return rows
+}
+
 const serializeRequest = (doc) => {
   if (!doc) return null
   const obj = doc.toObject ? doc.toObject() : { ...doc }
+  const reviewHistory = Array.isArray(obj.reviewHistory) && obj.reviewHistory.length
+    ? obj.reviewHistory
+    : fallbackReviewHistory(obj)
   return {
     ...obj,
-    id: obj._id
+    id: obj._id,
+    reviewHistory,
   }
+}
+
+const pushReviewHistory = (item, { action, actor, notes, creditLimit }) => {
+  if (!Array.isArray(item.reviewHistory)) item.reviewHistory = []
+  item.reviewHistory.push({
+    action,
+    actorId: actor?._id || null,
+    actorName: actor?.name || '',
+    actorEmail: actor?.email || '',
+    notes: notes || '',
+    creditLimit: creditLimit ?? null,
+    at: new Date(),
+  })
 }
 
 const sameDepartment = (user, item) =>
@@ -124,9 +178,11 @@ const sameDepartment = (user, item) =>
 const canViewApprovalRequest = async (user, item) => {
   if (!user || !item) return false
   if (String(item.requesterId) === String(user._id)) return true
+  if (isSuperAdminUser(user)) return true
   if (await isElevatedAdmin(user)) return canAccessDepartmentItem(user, item)
-  const accounts = await isAccountsUser(user)
-  return accounts && sameDepartment(user, item)
+  if (await isAccountsUser(user)) return sameDepartment(user, item)
+  if (await isComplianceUser(user)) return sameDepartment(user, item)
+  return sameDepartment(user, item)
 }
 
 async function syncCustomerFromRequest(request, extras = {}) {
@@ -382,10 +438,9 @@ router.post('/', async (req, res, next) => {
 
 router.get('/', async (req, res, next) => {
   try {
-    const accounts = await isAccountsUser(req.user)
-    const elevated = await isElevatedAdmin(req.user)
-    if (!accounts && !elevated) {
-      return res.status(403).json({ success: false, message: 'Only Accounts users or admins can view approval requests' })
+    const allowed = await canViewApprovalsList(req.user)
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'You cannot view customer approval requests' })
     }
 
     const filter = departmentFilterForViewer(req.user)
@@ -471,6 +526,13 @@ router.post(
       size: file.size,
       uploadedAt: new Date()
     }))
+
+    pushReviewHistory(item, {
+      action: 'PREPAID_SUBMITTED',
+      actor: req.user,
+      notes,
+      creditLimit: credit,
+    })
 
     await item.save()
     await syncCustomerFromRequest(item, {
@@ -569,7 +631,7 @@ router.post('/:id/review', async (req, res, next) => {
     if (!allowedReviewer) {
       return res.status(403).json({
         success: false,
-        message: 'Only Accounts users or admins can review requests'
+        message: 'Only Accounts users can accept or reject customer requests'
       })
     }
 
@@ -619,6 +681,13 @@ router.post('/:id/review', async (req, res, next) => {
       item.status = 'REJECTED'
     }
 
+    pushReviewHistory(item, {
+      action: action === 'approve' ? 'APPROVED' : 'REJECTED',
+      actor: req.user,
+      notes,
+      creditLimit: action === 'approve' ? item.approvedCredit : null,
+    })
+
     await item.save()
     await syncCustomerFromRequest(item)
 
@@ -648,6 +717,38 @@ router.post('/:id/review', async (req, res, next) => {
           ? `/customers/add?requestId=${item._id}`
           : null
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    if (!(await canRemoveApproval(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only Accounts users can remove a customer approval request',
+      })
+    }
+
+    const item = await CustomerApprovalRequest.findById(req.params.id)
+    if (!item) return res.status(404).json({ success: false, message: 'Request not found' })
+    if (!(await canAccessDepartmentItem(req.user, item))) {
+      return res.status(403).json({ success: false, message: 'Request is outside your department' })
+    }
+
+    const companyName = item.companyName
+    await item.deleteOne()
+
+    await logActivity({
+      req,
+      action: 'Customer Approval Removed',
+      description: `${req.user.name || 'Accounts'} removed the customer approval request for ${companyName}`,
+      type: 'warning',
+      module: 'Customers',
+    })
+
+    res.json({ success: true, message: 'Request removed' })
   } catch (error) {
     next(error)
   }
