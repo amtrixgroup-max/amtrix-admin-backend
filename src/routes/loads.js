@@ -27,10 +27,16 @@ import {
   paginateFind,
   parseListQuery,
   textSearch,
+  mongoSort,
 } from '../utils/listQuery.js'
 import CprRequest from '../models/CprRequest.js'
 import Department from '../models/Department.js'
 import { cprSummaryFromRequest, notifyCprReviewers } from '../utils/cpr.js'
+import {
+  mapTemplateToLoad,
+  parseTemplateUseQuantity,
+  uniqueLoadId,
+} from '../utils/mapTemplateToLoad.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -44,6 +50,63 @@ function serialize(doc) {
   if (!doc) return null
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc }
   return { ...obj, id: obj.id || String(obj._id) }
+}
+
+function templateStopCounts(payload = {}, existing = {}) {
+  const stops = Array.isArray(payload.stops) && payload.stops.length
+    ? payload.stops
+    : Array.isArray(existing.stops)
+      ? existing.stops
+      : []
+  const picks = stops.filter((stop) => stop?.type === 'pickup').length
+  const drops = stops.filter((stop) => stop?.type === 'delivery').length
+  return {
+    picks: picks || (Number.isFinite(Number(payload.picks)) ? Number(payload.picks) : Number(existing.picks) || 0),
+    drops: drops || (Number.isFinite(Number(payload.drops)) ? Number(payload.drops) : Number(existing.drops) || 0),
+  }
+}
+
+function serializeTemplate(doc) {
+  const obj = serialize(doc)
+  if (!obj) return null
+  return { ...obj, ...templateStopCounts(obj) }
+}
+
+function sanitizeTemplatePayload(payload = {}, existing = {}) {
+  const rest = { ...(payload || {}) }
+  ;[
+    '_id',
+    'id',
+    'deletedAt',
+    'createdBy',
+    'createdAt',
+    'updatedAt',
+    '__v',
+    'draft',
+    'postedAt',
+    'postedBy',
+    'isDraft',
+    'documents',
+    'emailHistory',
+    'documentRequests',
+    'paperworkOk',
+    'archived',
+    'postedBoards',
+    'cprStatus',
+    'cprRequestId',
+    'cprRequestedAt',
+    'cprApprovedAt',
+    'cprReviewedAt',
+    'cprReviewedByName',
+    'errorMessage',
+  ].forEach((key) => {
+    delete rest[key]
+  })
+  if (!Array.isArray(rest.stops) || !rest.stops.length) {
+    rest.stops = Array.isArray(existing.stops) && existing.stops.length ? existing.stops : defaultLoadStops()
+  }
+  Object.assign(rest, recalculateFinancials(rest, existing), templateStopCounts(rest, existing))
+  return rest
 }
 
 function byPublicId(id) {
@@ -202,11 +265,13 @@ function createLoadDefaults(payload = {}, user = null) {
     cprApprovedAt: rest.cprApprovedAt || null,
     cprReviewedAt: rest.cprReviewedAt || null,
     cprReviewedByName: rest.cprReviewedByName || '',
-    isDraft: true,
+    isDraft: false,
     postedAt: null,
     postedBy: '',
     updatedBy: userId,
-    quantity: rest.quantity || '',
+    quantity: rest.palletCount || rest.quantity || '',
+    palletCount: rest.palletCount || rest.quantity || '',
+    declaredValue: rest.declaredValue ?? '',
     weightUnit: rest.weightUnit || 'lbs',
     commodityDescription: rest.commodityDescription || '',
   }
@@ -276,38 +341,11 @@ function templateAssignmentFromPayload(payload = {}, user = null) {
     String(payload.assignedUserId || '').toLowerCase() === 'shared' ||
     (payload.isShared !== false && String(payload.branch || '').toLowerCase() === 'shared' && !payload.assignedUserId)
   return {
-    templateName: String(payload.templateName || '').trim() || 'Untitled template',
+    templateName: String(payload.templateName || '').trim(),
     branch: shared ? 'Shared' : payload.branch || '',
     assignedUserId: shared ? '' : payload.assignedUserId || (user?._id ? String(user._id) : ''),
     isShared: Boolean(shared),
   }
-}
-
-function uniqueLoadId(index = 0) {
-  return `LD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`
-}
-
-function loadPayloadFromTemplate(template, user) {
-  const obj = typeof template.toObject === 'function' ? template.toObject() : { ...template }
-  delete obj._id
-  delete obj.id
-  delete obj.templateName
-  delete obj.createdAt
-  delete obj.updatedAt
-  delete obj.__v
-  const shared = isSharedRecord(obj)
-  return createLoadDefaults(
-    {
-      ...obj,
-      tab: 'planning',
-      loadStatus: 'Pending',
-      id: uniqueLoadId(),
-      isShared: shared,
-      branch: shared ? 'Shared' : obj.branch || '',
-      assignedUserId: shared ? '' : String(user?._id || obj.assignedUserId || ''),
-    },
-    user,
-  )
 }
 
 function matchesBoardSearch(load, query = {}) {
@@ -341,10 +379,30 @@ function matchesBoardSearch(load, query = {}) {
   return true
 }
 
+function notDeleted() {
+  return { $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }] }
+}
+
+function templateScope(user) {
+  return mergeFilter(userScopeFilter(user), notDeleted())
+}
+
 router.get('/templates', async (req, res, next) => {
   try {
-    const templates = await LoadTemplate.find(userScopeFilter(req.user)).sort({ createdAt: -1 })
-    res.json({ success: true, data: templates.map(serialize) })
+    const list = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 })
+    const filter = andFilter(
+      templateScope(req.user),
+      textSearch(['templateName', 'customer', 'branch', 'createdBy'], list.search),
+      req.query.branch ? { branch: new RegExp(`^${escapeRegex(String(req.query.branch))}$`, 'i') } : {},
+      req.query.customerId ? { customerId: String(req.query.customerId) } : {},
+      req.query.createdBy ? { createdBy: String(req.query.createdBy) } : {},
+    )
+    const sort = mongoSort(list.sort)
+    const { items, total } = await paginateFind(LoadTemplate, filter, {
+      ...list,
+      sort,
+    })
+    res.json(listResponse(items.map(serializeTemplate), { ...list, total }))
   } catch (error) {
     next(error)
   }
@@ -354,13 +412,60 @@ router.post('/templates', async (req, res, next) => {
   try {
     const payload = req.body || {}
     const assignment = templateAssignmentFromPayload(payload, req.user)
+    const body = sanitizeTemplatePayload(payload)
     const template = await LoadTemplate.create({
-      ...payload,
+      ...body,
       ...assignment,
-      id: payload.id || `TPL-${Date.now()}`,
+      id: payload.id || `TPL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      loadStatus: body.loadStatus || 'Pending',
+      creationDate: body.creationDate || new Date().toISOString().slice(0, 10),
       createdBy: String(req.user._id),
+      updatedBy: String(req.user._id),
+      deletedAt: null,
     })
-    res.status(201).json({ success: true, data: serialize(template) })
+    await logActivity({
+      req,
+      action: 'CREATE_LOAD_TEMPLATE',
+      description: `Load template ${template.templateName || template.id} created`,
+      type: 'create',
+      module: 'Loads',
+      metadata: { templateId: template.id, templateName: template.templateName },
+    })
+    res.status(201).json({ success: true, data: serializeTemplate(template) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/templates/:id/accountability-log', async (req, res, next) => {
+  try {
+    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Template not found' })
+    }
+    const ActivityLog = (await import('../models/ActivityLog.js')).default
+    const logs = await ActivityLog.find({
+      $or: [
+        { 'metadata.templateId': existing.id },
+        { description: new RegExp(escapeRegex(existing.id), 'i') },
+      ],
+      module: 'Loads',
+    })
+      .sort({ timestamp: -1 })
+      .limit(100)
+    res.json({ success: true, data: logs.map((item) => (item.toObject ? item.toObject() : item)) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/templates/:id', async (req, res, next) => {
+  try {
+    const template = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Template not found' })
+    }
+    res.json({ success: true, data: serializeTemplate(template) })
   } catch (error) {
     next(error)
   }
@@ -368,19 +473,37 @@ router.post('/templates', async (req, res, next) => {
 
 router.put('/templates/:id', async (req, res, next) => {
   try {
-    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
+    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
     }
     const payload = { ...(req.body || {}) }
-    delete payload._id
+    if (payload.templateName !== undefined && !String(payload.templateName || '').trim()) {
+      return res.status(400).json({ success: false, message: 'Template name is required.' })
+    }
     const assignment = templateAssignmentFromPayload({ ...existing.toObject(), ...payload }, req.user)
+    if (!assignment.templateName) {
+      return res.status(400).json({ success: false, message: 'Template name is required.' })
+    }
+    const body = sanitizeTemplatePayload(payload, existing.toObject())
+    const errors = validateLoadDraft(body, existing)
+    if (Object.keys(errors).length) {
+      return res.status(400).json(validationResponse(errors))
+    }
     const template = await LoadTemplate.findByIdAndUpdate(
       existing._id,
-      { $set: { ...payload, ...assignment } },
+      { $set: { ...body, ...assignment, updatedBy: String(req.user._id) } },
       { new: true },
     )
-    res.json({ success: true, data: serialize(template) })
+    await logActivity({
+      req,
+      action: 'UPDATE_LOAD_TEMPLATE',
+      description: `Load template ${template.templateName} updated`,
+      type: 'update',
+      module: 'Loads',
+      metadata: { templateId: template.id, templateName: template.templateName },
+    })
+    res.json({ success: true, data: serializeTemplate(template) })
   } catch (error) {
     next(error)
   }
@@ -388,27 +511,63 @@ router.put('/templates/:id', async (req, res, next) => {
 
 router.post('/templates/:id/use', async (req, res, next) => {
   try {
-    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
+    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
     }
-    const quantity = Math.min(20, Math.max(1, Number(req.body?.quantity) || 1))
+    const parsed = parseTemplateUseQuantity(req.body?.quantity)
+    if (parsed.error) {
+      return res.status(400).json({ success: false, message: parsed.error, code: parsed.code })
+    }
     const created = []
-    for (let index = 0; index < quantity; index += 1) {
-      const payload = loadPayloadFromTemplate(existing, req.user)
-      payload.id = uniqueLoadId(index)
+    for (let index = 0; index < parsed.quantity; index += 1) {
+      const mapped = mapTemplateToLoad(existing, { user: req.user, loadId: uniqueLoadId(index), index })
+      const payload = createLoadDefaults(mapped, req.user)
+      payload.id = mapped.id
       Object.assign(payload, recalculateFinancials(payload), deriveStopSummary(payload))
+      const errors = validateLoadDraft(payload)
+      if (Object.keys(errors).length) {
+        return res.status(400).json({
+          success: false,
+          message: firstErrorMessage(errors),
+          errors,
+          created: created.map((item) => item.id),
+        })
+      }
       const load = await Load.create(payload)
       created.push(serialize(load))
       await logActivity({
         req,
-        action: 'Load Created',
+        action: 'CREATE_LOAD_FROM_TEMPLATE',
         description: `New load #${load.id} created from template ${existing.templateName || existing.id}`,
         type: 'create',
         module: 'Loads',
+        metadata: {
+          templateId: existing.id,
+          templateName: existing.templateName,
+          loadId: load.id,
+        },
       })
     }
-    res.status(201).json({ success: true, data: created, count: created.length })
+    await logActivity({
+      req,
+      action: 'USE_LOAD_TEMPLATE',
+      description: `Used template ${existing.templateName} to create ${created.length} load(s)`,
+      type: 'success',
+      module: 'Loads',
+      metadata: {
+        templateId: existing.id,
+        templateName: existing.templateName,
+        quantity: created.length,
+        createdLoadIds: created.map((item) => item.id),
+      },
+    })
+    res.status(201).json({
+      success: true,
+      message: 'Loads created successfully.',
+      data: created,
+      count: created.length,
+    })
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       return res.status(409).json(duplicateLoadResponse())
@@ -419,11 +578,21 @@ router.post('/templates/:id/use', async (req, res, next) => {
 
 router.delete('/templates/:id', async (req, res, next) => {
   try {
-    const existing = await LoadTemplate.findOne(byPublicId(req.params.id))
+    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
     }
-    await LoadTemplate.deleteOne({ _id: existing._id })
+    existing.deletedAt = new Date()
+    existing.updatedBy = String(req.user._id)
+    await existing.save()
+    await logActivity({
+      req,
+      action: 'DELETE_LOAD_TEMPLATE',
+      description: `Load template ${existing.templateName} deleted`,
+      type: 'warning',
+      module: 'Loads',
+      metadata: { templateId: existing.id, templateName: existing.templateName },
+    })
     res.json({ success: true, message: 'Template deleted' })
   } catch (error) {
     next(error)
@@ -655,7 +824,7 @@ router.put('/:id', async (req, res, next) => {
       payload.postedAt = null
       payload.postedBy = ''
     } else {
-      payload.isDraft = true
+      payload.isDraft = false
       payload.postedAt = null
       payload.postedBy = ''
       if (String(payload.loadStatus || '').toLowerCase().includes('post')) {

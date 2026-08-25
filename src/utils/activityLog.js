@@ -44,7 +44,8 @@ export function serializeActivity(log) {
     userEmail: obj.userEmail || '',
     timestamp: obj.timestamp || obj.createdAt,
     type: String(obj.type || 'info').toLowerCase(),
-    module: obj.module || 'System'
+    module: obj.module || 'System',
+    metadata: obj.metadata || null,
   }
 }
 
@@ -74,7 +75,8 @@ export async function logActivity({
   action,
   description,
   type = 'info',
-  module = 'System'
+  module = 'System',
+  metadata = null,
 } = {}) {
   try {
     const actor = user || req?.user
@@ -88,7 +90,8 @@ export async function logActivity({
       timestamp: new Date(),
       type: String(type || 'info').toLowerCase(),
       module: module || 'System',
-      departmentId: actor?.departmentId || null
+      departmentId: actor?.departmentId || null,
+      metadata: metadata || null,
     })
   } catch (error) {
     console.error('Activity log failed:', error?.message || error)

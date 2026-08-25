@@ -11,7 +11,8 @@ const activityLogSchema = new mongoose.Schema(
     timestamp: { type: Date, default: Date.now },
     type: { type: String, default: 'info' },
     module: { type: String, default: 'System' },
-    departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null }
+    departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true }
 )

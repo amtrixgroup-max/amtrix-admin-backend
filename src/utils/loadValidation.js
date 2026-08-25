@@ -72,10 +72,44 @@ export function reeferTemperatureError(payload = {}, existing = null) {
   return null
 }
 
+export const MAX_DECLARED_LOAD_VALUE = 100000
+
+export function declaredValueError(payload = {}, existing = null) {
+  const raw = payload.declaredValue !== undefined ? payload.declaredValue : existing?.declaredValue
+  if (raw === '' || raw == null) return null
+  const amount = Number(raw)
+  if (!Number.isFinite(amount) || amount < 0) {
+    return 'Declared load value must be a valid amount.'
+  }
+  if (amount > MAX_DECLARED_LOAD_VALUE) {
+    return 'Declared load value cannot exceed 1 lakh (100,000).'
+  }
+  return null
+}
+
+export function palletCountError(payload = {}, existing = null) {
+  const raw = payload.palletCount !== undefined
+    ? payload.palletCount
+    : payload.quantity !== undefined
+      ? payload.quantity
+      : existing?.palletCount ?? existing?.quantity
+  if (raw === '' || raw == null) return null
+  if (String(raw).includes('.')) return 'No of pallets must be a whole number.'
+  const count = Number(raw)
+  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
+    return 'No of pallets must be a whole number of at least 0.'
+  }
+  return null
+}
+
 export function validateLoadDraft(payload = {}, existing = null) {
   const errors = {}
   const tempError = reeferTemperatureError(payload, existing)
   if (tempError) errors.temperature = tempError
+  const valueError = declaredValueError(payload, existing)
+  if (valueError) errors.declaredValue = valueError
+  const palletsError = palletCountError(payload, existing)
+  if (palletsError) errors.quantity = palletsError
   return errors
 }
 
