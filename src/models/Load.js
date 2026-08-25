@@ -20,6 +20,9 @@ const loadSchema = new mongoose.Schema(
 
 loadSchema.index({ departmentId: 1, loadStatus: 1 })
 loadSchema.index({ isDraft: 1, tab: 1 })
+loadSchema.index({ customer: 1 })
+loadSchema.index({ carrier: 1 })
+loadSchema.index({ createdAt: -1 })
 
 const Load = mongoose.models.Load || mongoose.model('Load', loadSchema)
 export default Load

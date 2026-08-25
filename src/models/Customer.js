@@ -34,5 +34,9 @@ const customerSchema = new mongoose.Schema({
   publicNotes: String
 })
 
+customerSchema.index({ name: 1 })
+customerSchema.index({ departmentId: 1, approvalStatus: 1 })
+customerSchema.index({ mcNumber: 1 })
+
 const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema)
 export default Customer

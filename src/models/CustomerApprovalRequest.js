@@ -85,6 +85,9 @@ const customerApprovalRequestSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
+customerApprovalRequestSchema.index({ departmentId: 1, status: 1, createdAt: -1 })
+customerApprovalRequestSchema.index({ companyName: 1 })
+
 const CustomerApprovalRequest =
   mongoose.models.CustomerApprovalRequest ||
   mongoose.model('CustomerApprovalRequest', customerApprovalRequestSchema)

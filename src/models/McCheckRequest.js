@@ -132,6 +132,8 @@ const mcCheckRequestSchema = new mongoose.Schema(
 
 mcCheckRequestSchema.index({ requesterId: 1, createdAt: -1 })
 mcCheckRequestSchema.index({ departmentId: 1, status: 1, createdAt: -1 })
+mcCheckRequestSchema.index({ mcNo: 1 })
+mcCheckRequestSchema.index({ status: 1, createdAt: -1 })
 
 const McCheckRequest =
   mongoose.models.McCheckRequest || mongoose.model('McCheckRequest', mcCheckRequestSchema)

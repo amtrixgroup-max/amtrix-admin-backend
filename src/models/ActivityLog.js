@@ -18,6 +18,7 @@ const activityLogSchema = new mongoose.Schema(
 
 activityLogSchema.index({ timestamp: -1 })
 activityLogSchema.index({ userId: 1, timestamp: -1 })
+activityLogSchema.index({ departmentId: 1, timestamp: -1 })
 
 const ActivityLog = mongoose.models.ActivityLog || mongoose.model('ActivityLog', activityLogSchema)
 export default ActivityLog

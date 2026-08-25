@@ -3,6 +3,14 @@ import mongoose from 'mongoose'
 import Carrier from '../models/Carrier.js'
 import { authenticate } from '../middleware/auth.js'
 import { logActivity } from '../utils/activityLog.js'
+import {
+  andFilter,
+  listResponse,
+  mongoSort,
+  paginateFind,
+  parseListQuery,
+  textSearch,
+} from '../utils/listQuery.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -73,10 +81,16 @@ function normalizeCarrierPayload(body = {}, user = null) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const carriers = await Carrier.find(departmentFilter(req.user, req.query.departmentId)).sort({
-      createdAt: -1,
+    const list = parseListQuery(req.query)
+    const filter = andFilter(
+      departmentFilter(req.user, req.query.departmentId),
+      textSearch(['name', 'mcNumber', 'usdotNumber', 'contact', 'address', 'email'], list.search),
+    )
+    const { items, total } = await paginateFind(Carrier, filter, {
+      ...list,
+      sort: mongoSort(req.query.sort || '-createdAt'),
     })
-    res.json({ success: true, data: carriers.map(serialize) })
+    res.json(listResponse(items.map(serialize), { ...list, total }))
   } catch (error) {
     next(error)
   }

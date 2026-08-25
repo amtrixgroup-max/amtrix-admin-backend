@@ -35,6 +35,7 @@ const invoiceSchema = new mongoose.Schema(
 
 invoiceSchema.index({ recordKind: 1, type: 1 })
 invoiceSchema.index({ recordKind: 1, tab: 1 })
+invoiceSchema.index({ recordKind: 1, type: 1, loadNumber: 1 })
 
 const Invoice = mongoose.models.Invoice || mongoose.model('Invoice', invoiceSchema)
 export default Invoice

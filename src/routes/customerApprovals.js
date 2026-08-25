@@ -10,6 +10,13 @@ import { logActivity } from '../utils/activityLog.js'
 import Customer from '../models/Customer.js'
 import { uploadPrepaidPdfs, PREPAID_UPLOAD_DIR } from '../middleware/uploadPrepaid.js'
 import { isComplianceUser } from '../utils/mcCheckAccess.js'
+import {
+  andFilter,
+  listResponse,
+  paginateFind,
+  parseListQuery,
+  textSearch,
+} from '../utils/listQuery.js'
 import path from 'path'
 import fs from 'fs'
 
@@ -447,9 +454,17 @@ router.get('/', async (req, res, next) => {
     if (req.query.status) {
       filter.status = String(req.query.status).toUpperCase()
     }
-
-    const items = await CustomerApprovalRequest.find(filter).sort({ createdAt: -1 }).limit(300)
-    res.json({ success: true, data: items.map(serializeRequest) })
+    const list = parseListQuery(req.query)
+    const queryFilter = andFilter(
+      filter,
+      textSearch(['companyName', 'requesterName', 'status', 'departmentName', 'reviewedByName'], list.search),
+    )
+    const { items, total } = await paginateFind(CustomerApprovalRequest, queryFilter, {
+      ...list,
+      sort: { createdAt: -1 },
+      unpaginatedLimit: 300,
+    })
+    res.json(listResponse(items.map(serializeRequest), { ...list, total }))
   } catch (error) {
     next(error)
   }

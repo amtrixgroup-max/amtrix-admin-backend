@@ -23,5 +23,9 @@ const carrierSchema = new mongoose.Schema(
   { timestamps: true, strict: false },
 )
 
+carrierSchema.index({ mcNumber: 1 })
+carrierSchema.index({ name: 1 })
+carrierSchema.index({ departmentId: 1, createdAt: -1 })
+
 const Carrier = mongoose.models.Carrier || mongoose.model('Carrier', carrierSchema)
 export default Carrier

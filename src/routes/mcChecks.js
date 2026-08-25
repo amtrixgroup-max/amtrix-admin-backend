@@ -5,6 +5,14 @@ import Department from '../models/Department.js'
 import { authenticate } from '../middleware/auth.js'
 import { notifyUser, notifyUsers } from '../utils/notify.js'
 import { logActivity } from '../utils/activityLog.js'
+import {
+  andFilter,
+  listResponse,
+  paginateFind,
+  parseListQuery,
+  statusInFilter,
+  textSearch,
+} from '../utils/listQuery.js'
 import { upsertCarrierFromMcCheck } from '../utils/upsertCarrier.js'
 import { getDotGateDummyPreview } from '../data/dotGateDummy.js'
 import {
@@ -176,12 +184,19 @@ router.get('/', async (req, res, next) => {
       filter.requesterId = req.user._id
     }
 
-    if (req.query.status) {
-      filter.status = String(req.query.status).toUpperCase()
-    }
-
-    const items = await McCheckRequest.find(filter).sort({ createdAt: -1 }).limit(300)
-    res.json({ success: true, data: items.map(serializeRequest) })
+    const list = parseListQuery(req.query)
+    const fifo = String(req.query.sort || '').toLowerCase() === 'fifo'
+    const filterQuery = andFilter(
+      filter,
+      statusInFilter(req.query.status),
+      textSearch(['mcNo', 'dotNo', 'equipmentType', 'requesterName', 'status', 'departmentName'], list.search),
+    )
+    const { items, total } = await paginateFind(McCheckRequest, filterQuery, {
+      ...list,
+      sort: { createdAt: fifo ? 1 : -1 },
+      unpaginatedLimit: 300,
+    })
+    res.json(listResponse(items.map(serializeRequest), { ...list, total }))
   } catch (error) {
     next(error)
   }

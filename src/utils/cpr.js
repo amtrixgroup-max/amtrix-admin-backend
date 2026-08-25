@@ -7,7 +7,7 @@ export function serializeCprRequest(doc) {
   const status = String(obj.status || '').toUpperCase()
   return {
     ...obj,
-    id: obj._id,
+    id: String(obj._id || obj.id || ''),
     canAccept: status === 'PENDING',
     canReject: status === 'PENDING',
   }
@@ -60,7 +60,7 @@ export async function notifyCprReviewers(request, actor) {
       request.carrier ? `Carrier: ${request.carrier}` : '',
       request.documentNames?.length ? `Documents: ${request.documentNames.join(', ')}` : '',
       '',
-      'Please review this request in Amtrix Admin → Dashboard → CPR Approval Request.',
+      'Please review this request in Amtrix Admin → Carriers → CPR Approval Request.',
     ]
       .filter(Boolean)
       .join('\n'),

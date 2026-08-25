@@ -20,6 +20,14 @@ import { buildLoadDocumentPdf, pdfFilename } from '../utils/loadPdf.js'
 import { upsertLoadBillingRecords } from '../utils/loadBilling.js'
 import { LOAD_DOCS_UPLOAD_DIR, uploadLoadDocument } from '../middleware/uploadLoadDocs.js'
 import { sendMail } from '../utils/mailer.js'
+import {
+  andFilter,
+  escapeRegex,
+  listResponse,
+  paginateFind,
+  parseListQuery,
+  textSearch,
+} from '../utils/listQuery.js'
 import CprRequest from '../models/CprRequest.js'
 import Department from '../models/Department.js'
 import { cprSummaryFromRequest, notifyCprReviewers } from '../utils/cpr.js'
@@ -420,10 +428,57 @@ router.get('/board-search', async (req, res, next) => {
   }
 })
 
+function loadTabFilter(tabId, user) {
+  if (!tabId || tabId === 'all') return {}
+  if (tabId === 'my') {
+    const ids = valuesFor(user._id)
+    return { $or: [{ assignedUserId: { $in: ids } }, { createdBy: { $in: ids } }] }
+  }
+  const patterns = {
+    active: /ready|driver assigned|dispatched|transit|watch|claim|delivered/i,
+    planning: /new|open|planning|pending|needs carrier|needs driver|booked/i,
+    'externally-posted': /post/i,
+    accounting: /invoice/i,
+    misc: /cancel|archiv|complet/i,
+    ltl: /ltl/i,
+  }
+  const pattern = patterns[tabId]
+  if (pattern) return { $or: [{ tab: tabId }, { loadStatus: pattern }] }
+  return { tab: tabId }
+}
+
+function loadStatusFilter(status) {
+  if (!status) return {}
+  if (status === 'Posted Loads') {
+    return { $or: [{ loadStatus: /post/i }, { tab: 'externally-posted' }] }
+  }
+  return { loadStatus: new RegExp(`^${escapeRegex(status)}$`, 'i') }
+}
+
+const LOAD_LIST_SELECT =
+  'id tab loadStatus isDraft lastContact customer picks pickDate drops dropDate usersRoles carrier driver equipment powerUnit income expenses reference postedRate assignedUserId createdBy createdAt departmentId'
+
 router.get('/', async (req, res, next) => {
   try {
-    const loads = await Load.find(userScopeFilter(req.user)).sort({ createdAt: -1 })
-    res.json({ success: true, data: loads.map(serialize) })
+    const list = parseListQuery(req.query, { defaultLimit: 50, maxLimit: 100 })
+    const filter = andFilter(
+      userScopeFilter(req.user),
+      loadTabFilter(req.query.tab, req.user),
+      loadStatusFilter(req.query.status),
+      textSearch(['id', 'customer', 'carrier', 'picks', 'drops', 'reference', 'loadStatus'], list.search),
+    )
+
+    if (req.query.idsOnly) {
+      const docs = await Load.find(filter).select('id').limit(5000).lean()
+      return res.json({ success: true, data: docs.map((item) => item.id).filter(Boolean) })
+    }
+
+    const { items, total } = await paginateFind(Load, filter, {
+      ...list,
+      sort: { createdAt: -1 },
+      select: list.paginate ? LOAD_LIST_SELECT : undefined,
+    })
+    res.json(listResponse(items.map(serialize), { ...list, total }))
   } catch (error) {
     next(error)
   }

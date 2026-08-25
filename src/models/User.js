@@ -167,6 +167,9 @@ userSchema.methods.isActive = function () {
   return status === 'ACTIVE'
 }
 
+userSchema.index({ departmentId: 1, createdAt: -1 })
+userSchema.index({ name: 1 })
+
 const User = mongoose.models.User || mongoose.model('User', userSchema)
 
 export default User

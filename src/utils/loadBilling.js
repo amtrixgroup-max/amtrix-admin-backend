@@ -7,21 +7,28 @@ function dueDateFrom(start, days = 30) {
   return date
 }
 
-async function upsertInvoice({ id, type, load, name, total }) {
+async function upsertInvoice({ id, recordKind, type, tab, load, name, total }) {
   const amount = Number(total) || 0
   if (amount <= 0 || !name) return null
-  const existing = await Invoice.findOne({ $or: [{ id }, { loadNumber: load.id, type, recordKind: 'ar-ap' }] })
+  const existing = await Invoice.findOne({
+    $or: [
+      { id },
+      { loadNumber: load.id, type, recordKind },
+    ],
+  })
+  const invoiceDate = load.postedAt || load.sentToAccountingAt || new Date()
   const payload = {
-    recordKind: 'ar-ap',
+    recordKind,
     type,
+    tab,
     name,
     companyName: name,
     invoiceNumber: id,
-    invoiceDate: load.postedAt || load.sentToAccountingAt || new Date(),
+    invoiceDate,
     loadNumber: load.id,
     reference: load.reference || load.loadReference || '',
     paymentTerms: 'Net 30',
-    dueDate: dueDateFrom(load.postedAt || load.sentToAccountingAt || new Date(), 30),
+    dueDate: dueDateFrom(invoiceDate, 30),
     deliveryDate: load.dropDate || null,
     invoiceTotal: amount,
     paid: existing?.paid || 0,
@@ -29,7 +36,8 @@ async function upsertInvoice({ id, type, load, name, total }) {
     pickAddress: load.picks || '',
     dropAddress: load.drops || '',
     loadStatus: load.loadStatus || '',
-    sentStatus: 'Generated',
+    sentStatus: existing?.sentStatus || (recordKind === 'management' ? 'Not Sent to Customer' : 'Generated'),
+    qboExportStatus: existing?.qboExportStatus || 'Not Exported',
     containerNumber: load.containerNumber || '',
   }
   if (existing) {
@@ -44,6 +52,7 @@ export async function upsertLoadBillingRecords(load) {
   const created = []
   const ar = await upsertInvoice({
     id: `INV-AR-${load.id}`,
+    recordKind: 'ar-ap',
     type: 'AR',
     load,
     name: load.customer,
@@ -52,11 +61,32 @@ export async function upsertLoadBillingRecords(load) {
   if (ar) created.push(ar)
   const ap = await upsertInvoice({
     id: `INV-AP-${load.id}`,
+    recordKind: 'ar-ap',
     type: 'AP',
     load,
     name: load.carrier,
     total: load.expenses,
   })
   if (ap) created.push(ap)
+  const invoice = await upsertInvoice({
+    id: `INV-MGMT-${load.id}`,
+    recordKind: 'management',
+    type: 'AR',
+    tab: 'invoices',
+    load,
+    name: load.customer,
+    total: load.income,
+  })
+  if (invoice) created.push(invoice)
+  const bill = await upsertInvoice({
+    id: `BILL-MGMT-${load.id}`,
+    recordKind: 'management',
+    type: 'AP',
+    tab: 'bills',
+    load,
+    name: load.carrier,
+    total: load.expenses,
+  })
+  if (bill) created.push(bill)
   return created
 }

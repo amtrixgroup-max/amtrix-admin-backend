@@ -7,6 +7,13 @@ import { notifyUser } from '../utils/notify.js'
 import { logActivity } from '../utils/activityLog.js'
 import { serializeCprRequest } from '../utils/cpr.js'
 import {
+  andFilter,
+  listResponse,
+  paginateFind,
+  parseListQuery,
+  textSearch,
+} from '../utils/listQuery.js'
+import {
   canAccessDepartmentItem,
   canReviewMcCheck,
   departmentFilterForViewer,
@@ -45,12 +52,18 @@ router.get('/', async (req, res, next) => {
       filter.status = String(req.query.status).toUpperCase()
     }
 
+    const list = parseListQuery(req.query)
     const fifo = String(req.query.sort || '').toLowerCase() !== 'newest'
-    const items = await CprRequest.find(filter)
-      .sort({ createdAt: fifo ? 1 : -1 })
-      .limit(300)
-
-    res.json({ success: true, data: items.map(serializeCprRequest) })
+    const queryFilter = andFilter(
+      filter,
+      textSearch(['loadId', 'carrier', 'customer', 'requesterName', 'status', 'departmentName'], list.search),
+    )
+    const { items, total } = await paginateFind(CprRequest, queryFilter, {
+      ...list,
+      sort: { createdAt: fifo ? 1 : -1 },
+      unpaginatedLimit: 300,
+    })
+    res.json(listResponse(items.map(serializeCprRequest), { ...list, total }))
   } catch (error) {
     next(error)
   }

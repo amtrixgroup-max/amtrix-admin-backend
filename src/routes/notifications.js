@@ -3,6 +3,11 @@ import Notification from '../models/Notification.js'
 import User from '../models/User.js'
 import { authenticate } from '../middleware/auth.js'
 import { requirePermission } from '../middleware/requirePermission.js'
+import {
+  listResponse,
+  paginateFind,
+  parseListQuery,
+} from '../utils/listQuery.js'
 
 const router = express.Router()
 
@@ -45,8 +50,13 @@ router.get('/', async (req, res, next) => {
 
     if (unread === 'true') query.read = false
 
-    const items = await Notification.find(query).sort({ createdAt: -1 }).limit(200)
-    res.json({ success: true, data: items })
+    const list = parseListQuery(req.query, { defaultLimit: 50, maxLimit: 100 })
+    const options = list.paginate ? list : { ...list, paginate: true, page: 1, limit: 200, skip: 0 }
+    const { items, total } = await paginateFind(Notification, query, {
+      ...options,
+      sort: { createdAt: -1 },
+    })
+    res.json(list.paginate ? listResponse(items, { ...options, total }) : { success: true, data: items })
   } catch (error) {
     next(error)
   }

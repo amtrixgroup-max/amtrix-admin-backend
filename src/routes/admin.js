@@ -10,6 +10,14 @@ import net from 'net'
 import { getEffectivePermissions } from '../utils/permissions.js'
 import { isAdminLikeUser, normalizeIp } from '../utils/ipAccess.js'
 import { logActivity } from '../utils/activityLog.js'
+import {
+  andFilter,
+  listResponse,
+  mongoSort,
+  paginateFind,
+  parseListQuery,
+  textSearch,
+} from '../utils/listQuery.js'
 
 const router = express.Router()
 
@@ -226,14 +234,20 @@ router.get('/users', requirePermission('USER_VIEW'), async (req, res, next) => {
       filter.departmentId = req.query.departmentId
     }
 
-    const users = await User.find(filter)
-      .select('-password')
-      .populate('departmentId', 'name code displayName')
-      .populate('roleId', 'name displayName subRoles')
-      .populate('managerId', 'name email')
-      .sort({ createdAt: -1 })
+    const list = parseListQuery(req.query)
+    const queryFilter = andFilter(filter, textSearch(['name', 'email', 'employeeId'], list.search))
+    const { items, total } = await paginateFind(User, queryFilter, {
+      ...list,
+      sort: mongoSort(list.sort),
+      select: '-password',
+      populate: [
+        { path: 'departmentId', select: 'name code displayName' },
+        { path: 'roleId', select: 'name displayName subRoles' },
+        { path: 'managerId', select: 'name email' },
+      ],
+    })
 
-    res.json({ success: true, data: users })
+    res.json(listResponse(items, { ...list, total }))
   } catch (error) {
     next(error)
   }

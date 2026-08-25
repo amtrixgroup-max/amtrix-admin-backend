@@ -4,6 +4,14 @@ import CustomerApprovalRequest from '../models/CustomerApprovalRequest.js'
 import Role from '../models/Role.js'
 import { authenticate } from '../middleware/auth.js'
 import { logActivity } from '../utils/activityLog.js'
+import {
+  andFilter,
+  listResponse,
+  mongoSort,
+  paginateFind,
+  parseListQuery,
+  textSearch,
+} from '../utils/listQuery.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -105,19 +113,82 @@ router.get('/', async (req, res, next) => {
       requestFilter.departmentId = departmentId
     }
 
+    const list = parseListQuery(req.query)
+    const status = String(req.query.status || '').toUpperCase()
+    const searchFilter = textSearch(
+      ['name', 'contact', 'address', 'phone', 'email', 'usdotNumber', 'mcNumber', 'approvalStatus'],
+      list.search,
+    )
+    const requestSearch = textSearch(
+      ['companyName', 'contactPersonName', 'contactPersonNumber', 'address', 'status', 'requesterName'],
+      list.search,
+    )
+
+    if (list.paginate && ['PENDING', 'REJECTED', 'PREPAID'].includes(status)) {
+      const requestQuery = andFilter(requestFilter, { status }, requestSearch)
+      const { items, total } = await paginateFind(CustomerApprovalRequest, requestQuery, {
+        ...list,
+        sort: mongoSort(req.query.sort || '-createdAt'),
+      })
+      return res.json(listResponse(items.map(customerFromRequest), { ...list, total }))
+    }
+
+    if (list.paginate) {
+      const customerQuery = andFilter(
+        filter,
+        status === 'APPROVED' ? { approvalStatus: { $in: ['APPROVED', 'ACTIVE', null, ''] } } : {},
+        searchFilter,
+      )
+      const { items, total } = await paginateFind(Customer, customerQuery, {
+        ...list,
+        sort: mongoSort(req.query.sort || 'name'),
+      })
+      const mapped = items.map(serializeCustomer)
+      const requestIds = mapped
+        .map((item) => item.approvalRequestId)
+        .filter(Boolean)
+      const customerIds = mapped.map((item) => item.id).filter(Boolean)
+      if (requestIds.length || customerIds.length) {
+        const requests = await CustomerApprovalRequest.find({
+          $or: [
+            ...(requestIds.length ? [{ _id: { $in: requestIds } }] : []),
+            ...(customerIds.length ? [{ customerId: { $in: customerIds } }] : []),
+          ],
+        })
+        for (const request of requests) {
+          const requestId = String(request._id)
+          const existing = mapped.find(
+            (item) =>
+              String(item.approvalRequestId || '') === requestId ||
+              String(item.id) === String(request.customerId || ''),
+          )
+          if (!existing) continue
+          existing.approvalStatus = request.status
+          existing.status = request.status
+          existing.reviewNotes = request.reviewNotes || existing.reviewNotes
+          existing.prepaidCreditRequired = request.prepaidCreditRequired
+          existing.prepaidNotes = request.prepaidNotes
+          existing.prepaidDocuments = request.prepaidDocuments
+          existing.prepaidRequestedAt = request.prepaidRequestedAt
+          existing.approvalRequestId = existing.approvalRequestId || request._id
+        }
+      }
+      return res.json(listResponse(mapped, { ...list, total }))
+    }
+
     const customers = await Customer.find(filter)
-    const list = customers.map(serializeCustomer)
+    const resultList = customers.map(serializeCustomer)
 
     const requests = await CustomerApprovalRequest.find(requestFilter).sort({ createdAt: -1 })
     const linked = new Set(
-      list
+      resultList
         .map((item) => (item.approvalRequestId ? String(item.approvalRequestId) : ''))
         .filter(Boolean),
     )
 
     for (const request of requests) {
       const requestId = String(request._id)
-      const existing = list.find(
+      const existing = resultList.find(
         (item) =>
           String(item.approvalRequestId || '') === requestId ||
           String(item.id) === String(request.customerId || ''),
@@ -134,11 +205,11 @@ router.get('/', async (req, res, next) => {
         continue
       }
       if (!linked.has(requestId)) {
-        list.push(customerFromRequest(request))
+        resultList.push(customerFromRequest(request))
       }
     }
 
-    res.json({ success: true, data: list })
+    res.json({ success: true, data: resultList })
   } catch (error) {
     next(error)
   }
