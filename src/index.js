@@ -5,6 +5,7 @@ import connectDB from './config/db.js'
 import { seedRbacData } from './seed/seedRbac.js'
 import { seedAccountingData } from './seed/seedAccounting.js'
 import { seedLoadData } from './seed/seedLoads.js'
+import { seedCarrierData } from './seed/seedCarriers.js'
 import { initSocket } from './socket.js'
 import { startPendingMcCheckReminderJob } from './utils/mcCheckReminders.js'
 
@@ -18,6 +19,7 @@ const startServer = async () => {
     await seedRbacData()
     await seedAccountingData()
     await seedLoadData()
+    await seedCarrierData()
 
     const server = http.createServer(app)
     initSocket(server)

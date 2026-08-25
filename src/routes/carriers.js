@@ -43,12 +43,16 @@ async function findCarrier(rawId) {
 }
 
 function departmentFilter(user, queryDepartmentId) {
+  // Super Admin with no explicit department scope sees every carrier.
   if (isSuperAdmin(user) && !queryDepartmentId) return {}
-  const departmentId = queryDepartmentId || (user?.departmentId ? String(user.departmentId) : '')
+  const departmentId = String(
+    queryDepartmentId || (user?.departmentId ? String(user.departmentId) : '') || '',
+  ).trim()
   if (!departmentId) return {}
   return {
     $or: [
       { departmentId },
+      { departmentId: String(departmentId) },
       { departmentId: { $exists: false } },
       { departmentId: '' },
       { departmentId: null },

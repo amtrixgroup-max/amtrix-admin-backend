@@ -9,6 +9,7 @@ const loadSchema = new mongoose.Schema(
     customer: { type: String, default: '' },
     carrier: { type: String, default: '' },
     branch: { type: String, default: 'Shared' },
+    isShared: { type: Boolean, default: false, index: true },
     departmentId: { type: String, default: '', index: true },
     createdBy: { type: String, default: '', index: true },
     updatedBy: { type: String, default: '' },

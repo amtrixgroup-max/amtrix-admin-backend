@@ -101,6 +101,15 @@ function tabFromLoadStatus(status, fallback = 'planning') {
   return fallback || 'planning'
 }
 
+function isSharedRecord(value) {
+  if (!value || typeof value !== 'object') return false
+  if (value.isShared === true) return true
+  if (value.isShared === false) return false
+  const assigned = String(value.assignedUserId || '').trim()
+  if (assigned && assigned.toLowerCase() !== 'shared') return false
+  return String(value.branch || '').trim().toLowerCase() === 'shared'
+}
+
 function userScopeFilter(user) {
   if (isSuperAdmin(user)) return {}
   const userIds = valuesFor(user._id)
@@ -108,6 +117,19 @@ function userScopeFilter(user) {
   const or = [
     { createdBy: { $in: userIds } },
     { assignedUserId: { $in: userIds } },
+    { isShared: true },
+    {
+      $and: [
+        { branch: /^shared$/i },
+        {
+          $or: [
+            { assignedUserId: { $exists: false } },
+            { assignedUserId: '' },
+            { assignedUserId: null },
+          ],
+        },
+      ],
+    },
     { createdBy: { $exists: false } },
     { createdBy: '' },
     { createdBy: null },
@@ -125,6 +147,7 @@ function createLoadDefaults(payload = {}, user = null) {
   const loadStatus = rest.loadStatus || 'Pending'
   const id = rest.id || `LD-${Date.now()}`
   const equipmentType = resolvedEquipmentType(rest)
+  const shared = isSharedRecord(rest) || String(rest.assignedUserId || '').toLowerCase() === 'shared'
   return {
     ...rest,
     id,
@@ -148,8 +171,9 @@ function createLoadDefaults(payload = {}, user = null) {
     income: rest.income || 0,
     expenses: rest.expenses || 0,
     usersRoles: rest.usersRoles || '',
-    branch: rest.branch || 'Shared',
-    assignedUserId: rest.assignedUserId ? String(rest.assignedUserId) : userId,
+    branch: shared ? 'Shared' : rest.branch || '',
+    assignedUserId: shared ? '' : rest.assignedUserId ? String(rest.assignedUserId) : userId,
+    isShared: shared,
     createdBy: userId,
     departmentId: rest.departmentId || (user?.departmentId ? String(user.departmentId) : ''),
     creationDate: rest.creationDate || now.toISOString().slice(0, 10),
@@ -194,6 +218,14 @@ function mergeLoadData(existing, payload = {}) {
   delete next._id
   delete next.draft
   next.id = existing.id
+  const shared = isSharedRecord(next) || String(next.assignedUserId || '').toLowerCase() === 'shared'
+  if (shared) {
+    next.branch = 'Shared'
+    next.assignedUserId = ''
+    next.isShared = true
+  } else {
+    next.isShared = false
+  }
   const money = recalculateFinancials(next, current)
   const stops = deriveStopSummary(next, current)
   const equipmentType = resolvedEquipmentType(next)
@@ -238,6 +270,46 @@ function isDuplicateKeyError(error) {
   return Boolean(error && (error.code === 11000 || error.code === '11000'))
 }
 
+function templateAssignmentFromPayload(payload = {}, user = null) {
+  const shared =
+    payload.isShared === true ||
+    String(payload.assignedUserId || '').toLowerCase() === 'shared' ||
+    (payload.isShared !== false && String(payload.branch || '').toLowerCase() === 'shared' && !payload.assignedUserId)
+  return {
+    templateName: String(payload.templateName || '').trim() || 'Untitled template',
+    branch: shared ? 'Shared' : payload.branch || '',
+    assignedUserId: shared ? '' : payload.assignedUserId || (user?._id ? String(user._id) : ''),
+    isShared: Boolean(shared),
+  }
+}
+
+function uniqueLoadId(index = 0) {
+  return `LD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function loadPayloadFromTemplate(template, user) {
+  const obj = typeof template.toObject === 'function' ? template.toObject() : { ...template }
+  delete obj._id
+  delete obj.id
+  delete obj.templateName
+  delete obj.createdAt
+  delete obj.updatedAt
+  delete obj.__v
+  const shared = isSharedRecord(obj)
+  return createLoadDefaults(
+    {
+      ...obj,
+      tab: 'planning',
+      loadStatus: 'Pending',
+      id: uniqueLoadId(),
+      isShared: shared,
+      branch: shared ? 'Shared' : obj.branch || '',
+      assignedUserId: shared ? '' : String(user?._id || obj.assignedUserId || ''),
+    },
+    user,
+  )
+}
+
 function matchesBoardSearch(load, query = {}) {
   const status = String(load.loadStatus || '').toLowerCase()
   if (!status.includes('post') && load.tab !== 'externally-posted') return false
@@ -271,7 +343,7 @@ function matchesBoardSearch(load, query = {}) {
 
 router.get('/templates', async (req, res, next) => {
   try {
-    const templates = await LoadTemplate.find().sort({ createdAt: -1 })
+    const templates = await LoadTemplate.find(userScopeFilter(req.user)).sort({ createdAt: -1 })
     res.json({ success: true, data: templates.map(serialize) })
   } catch (error) {
     next(error)
@@ -281,12 +353,11 @@ router.get('/templates', async (req, res, next) => {
 router.post('/templates', async (req, res, next) => {
   try {
     const payload = req.body || {}
+    const assignment = templateAssignmentFromPayload(payload, req.user)
     const template = await LoadTemplate.create({
       ...payload,
+      ...assignment,
       id: payload.id || `TPL-${Date.now()}`,
-      templateName: payload.templateName || 'Untitled template',
-      branch: payload.branch || 'Shared',
-      assignedUserId: payload.assignedUserId || String(req.user._id),
       createdBy: String(req.user._id),
     })
     res.status(201).json({ success: true, data: serialize(template) })
@@ -297,15 +368,51 @@ router.post('/templates', async (req, res, next) => {
 
 router.put('/templates/:id', async (req, res, next) => {
   try {
-    const existing = await LoadTemplate.findOne(byPublicId(req.params.id))
+    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
     }
     const payload = { ...(req.body || {}) }
     delete payload._id
-    const template = await LoadTemplate.findByIdAndUpdate(existing._id, { $set: payload }, { new: true })
+    const assignment = templateAssignmentFromPayload({ ...existing.toObject(), ...payload }, req.user)
+    const template = await LoadTemplate.findByIdAndUpdate(
+      existing._id,
+      { $set: { ...payload, ...assignment } },
+      { new: true },
+    )
     res.json({ success: true, data: serialize(template) })
   } catch (error) {
+    next(error)
+  }
+})
+
+router.post('/templates/:id/use', async (req, res, next) => {
+  try {
+    const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), userScopeFilter(req.user)))
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Template not found' })
+    }
+    const quantity = Math.min(20, Math.max(1, Number(req.body?.quantity) || 1))
+    const created = []
+    for (let index = 0; index < quantity; index += 1) {
+      const payload = loadPayloadFromTemplate(existing, req.user)
+      payload.id = uniqueLoadId(index)
+      Object.assign(payload, recalculateFinancials(payload), deriveStopSummary(payload))
+      const load = await Load.create(payload)
+      created.push(serialize(load))
+      await logActivity({
+        req,
+        action: 'Load Created',
+        description: `New load #${load.id} created from template ${existing.templateName || existing.id}`,
+        type: 'create',
+        module: 'Loads',
+      })
+    }
+    res.status(201).json({ success: true, data: created, count: created.length })
+  } catch (error) {
+    if (isDuplicateKeyError(error)) {
+      return res.status(409).json(duplicateLoadResponse())
+    }
     next(error)
   }
 })
