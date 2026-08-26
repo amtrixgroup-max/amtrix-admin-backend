@@ -67,6 +67,19 @@ export function listResponse(items, meta = {}) {
   }
 }
 
+function statusRankExpression(statusPriority = []) {
+  const statuses = statusPriority.map((value) => String(value || '').toUpperCase()).filter(Boolean)
+  if (!statuses.length) return null
+  return {
+    $let: {
+      vars: {
+        idx: { $indexOfArray: [statuses, { $toUpper: { $ifNull: ['$status', ''] } }] },
+      },
+      in: { $cond: [{ $lt: ['$$idx', 0] }, statuses.length, '$$idx'] },
+    },
+  }
+}
+
 export async function paginateFind(Model, filter, options = {}) {
   const {
     paginate,
@@ -77,7 +90,32 @@ export async function paginateFind(Model, filter, options = {}) {
     populate,
     lean = false,
     unpaginatedLimit,
+    statusPriority = [],
   } = options
+
+  const match = filter && Object.keys(filter).length ? filter : {}
+  const rankExpr = statusRankExpression(statusPriority)
+
+  if (rankExpr) {
+    const pipeline = [
+      { $match: match },
+      { $addFields: { _statusRank: rankExpr } },
+      { $sort: { _statusRank: 1, ...sort, _id: 1 } },
+      { $project: { _statusRank: 0 } },
+    ]
+
+    if (!paginate) {
+      if (unpaginatedLimit) pipeline.push({ $limit: unpaginatedLimit })
+      const items = await Model.aggregate(pipeline)
+      return { items, total: items.length }
+    }
+
+    const [countAgg, items] = await Promise.all([
+      Model.aggregate([{ $match: match }, { $count: 'total' }]),
+      Model.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]),
+    ])
+    return { items, total: countAgg[0]?.total || 0 }
+  }
 
   const apply = (query) => {
     let next = query.sort(sort)

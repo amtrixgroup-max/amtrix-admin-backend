@@ -194,6 +194,7 @@ router.get('/', async (req, res, next) => {
     const { items, total } = await paginateFind(McCheckRequest, filterQuery, {
       ...list,
       sort: { createdAt: fifo ? 1 : -1 },
+      statusPriority: ['PENDING', 'EXCEPTION_PENDING'],
       unpaginatedLimit: 300,
     })
     res.json(listResponse(items.map(serializeRequest), { ...list, total }))

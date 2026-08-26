@@ -62,6 +62,7 @@ router.get('/', async (req, res, next) => {
     const { items, total } = await paginateFind(CprRequest, queryFilter, {
       ...list,
       sort: { createdAt: fifo ? 1 : -1 },
+      statusPriority: ['PENDING'],
       unpaginatedLimit: 300,
     })
     res.json(listResponse(items.map(serializeCprRequest), { ...list, total }))
