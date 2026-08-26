@@ -37,6 +37,7 @@ import {
   parseTemplateUseQuantity,
   uniqueLoadId,
 } from '../utils/mapTemplateToLoad.js'
+import { canBuildLoad } from '../utils/mcCheckAccess.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -387,6 +388,15 @@ function templateScope(user) {
   return mergeFilter(userScopeFilter(user), notDeleted())
 }
 
+async function requireBuildLoadAccess(req, res) {
+  if (await canBuildLoad(req.user)) return true
+  res.status(403).json({
+    success: false,
+    message: 'Only Normal User, Admin, and Super Admin can build a load',
+  })
+  return false
+}
+
 router.get('/templates', async (req, res, next) => {
   try {
     const list = parseListQuery(req.query, { defaultLimit: 20, maxLimit: 100 })
@@ -410,6 +420,7 @@ router.get('/templates', async (req, res, next) => {
 
 router.post('/templates', async (req, res, next) => {
   try {
+    if (!(await requireBuildLoadAccess(req, res))) return
     const payload = req.body || {}
     const assignment = templateAssignmentFromPayload(payload, req.user)
     const body = sanitizeTemplatePayload(payload)
@@ -473,6 +484,7 @@ router.get('/templates/:id', async (req, res, next) => {
 
 router.put('/templates/:id', async (req, res, next) => {
   try {
+    if (!(await requireBuildLoadAccess(req, res))) return
     const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
@@ -511,6 +523,7 @@ router.put('/templates/:id', async (req, res, next) => {
 
 router.post('/templates/:id/use', async (req, res, next) => {
   try {
+    if (!(await requireBuildLoadAccess(req, res))) return
     const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
@@ -578,6 +591,7 @@ router.post('/templates/:id/use', async (req, res, next) => {
 
 router.delete('/templates/:id', async (req, res, next) => {
   try {
+    if (!(await requireBuildLoadAccess(req, res))) return
     const existing = await LoadTemplate.findOne(mergeFilter(byPublicId(req.params.id), templateScope(req.user)))
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Template not found' })
@@ -762,6 +776,7 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
+    if (!(await requireBuildLoadAccess(req, res))) return
     const payload = createLoadDefaults(req.body || {}, req.user)
     Object.assign(payload, recalculateFinancials(payload), deriveStopSummary(payload))
     const errors = validateLoadDraft(payload)

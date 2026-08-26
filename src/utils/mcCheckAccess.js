@@ -33,6 +33,13 @@ export const isNormalUserRole = (roleName) => {
   return name === 'NORMAL_USER' || name === 'USER'
 }
 
+export const canBuildLoad = async (user) => {
+  if (!user) return false
+  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return true
+  const meta = await getRoleMeta(user)
+  return isNormalUserRole(meta.name)
+}
+
 export const isSuperAdminUser = (user) =>
   Boolean(user && (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN'))
 
