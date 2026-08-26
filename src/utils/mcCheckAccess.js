@@ -25,7 +25,7 @@ export const normalizeRole = (value) =>
 export const isComplianceRole = (roleName, displayName = '') => {
   const name = normalizeRole(roleName)
   const display = normalizeRole(displayName)
-  return name === 'COMPLIANCE' || display === 'COMPLIANCE' || display.includes('COMPLIANCE')
+  return name === 'COMPLIANCE' || name.includes('COMPLIANCE') || display === 'COMPLIANCE' || display.includes('COMPLIANCE')
 }
 
 export const isNormalUserRole = (roleName) => {

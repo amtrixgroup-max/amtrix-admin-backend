@@ -88,16 +88,20 @@ export function declaredValueError(payload = {}, existing = null) {
 }
 
 export function palletCountError(payload = {}, existing = null) {
+  const loadSize = String(payload.loadSize ?? existing?.loadSize ?? '').toLowerCase()
+  if (loadSize !== 'partial') return null
   const raw = payload.palletCount !== undefined
     ? payload.palletCount
     : payload.quantity !== undefined
       ? payload.quantity
       : existing?.palletCount ?? existing?.quantity
-  if (raw === '' || raw == null) return null
+  if (raw === '' || raw == null) {
+    return 'No of pallets is required for a partial load.'
+  }
   if (String(raw).includes('.')) return 'No of pallets must be a whole number.'
   const count = Number(raw)
-  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
-    return 'No of pallets must be a whole number of at least 0.'
+  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 1) {
+    return 'No of pallets must be a whole number of at least 1.'
   }
   return null
 }

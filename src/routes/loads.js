@@ -732,7 +732,7 @@ function loadStatusFilter(status) {
 }
 
 const LOAD_LIST_SELECT =
-  'id tab loadStatus isDraft lastContact customer picks pickDate drops dropDate usersRoles carrier driver equipment powerUnit income expenses reference postedRate assignedUserId createdBy createdAt departmentId'
+  'id tab loadStatus isDraft lastContact customer picks pickDate drops dropDate usersRoles carrier driver equipment powerUnit income expenses reference postedRate assignedUserId createdBy createdAt departmentId cprStatus cprRequestId'
 
 router.get('/', async (req, res, next) => {
   try {
@@ -1325,11 +1325,12 @@ router.post('/:id/cpr-request', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'A CPR request is already pending for this load.' })
     }
 
-    let departmentName = ''
+    const scopedDepartmentId = req.user.departmentId || load.departmentId || null
+    let departmentName = load.departmentName || ''
     let departmentCode = load.departmentCode || req.user.department || ''
-    if (req.user.departmentId) {
-      const department = await Department.findById(req.user.departmentId).lean()
-      departmentName = department?.displayName || department?.name || ''
+    if (scopedDepartmentId) {
+      const department = await Department.findById(scopedDepartmentId).lean()
+      departmentName = department?.displayName || department?.name || departmentName
       departmentCode = department?.code || departmentCode
     }
 
@@ -1344,7 +1345,7 @@ router.post('/:id/cpr-request', async (req, res, next) => {
       requesterId: req.user._id,
       requesterName: req.user.name || '',
       requesterEmail: req.user.email || '',
-      departmentId: req.user.departmentId || null,
+      departmentId: scopedDepartmentId,
       departmentCode,
       departmentName,
       status: 'PENDING',

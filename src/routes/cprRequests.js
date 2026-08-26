@@ -15,7 +15,6 @@ import {
 } from '../utils/listQuery.js'
 import {
   canAccessDepartmentItem,
-  canReviewMcCheck,
   departmentFilterForViewer,
   isElevatedAdmin,
   isComplianceUser,
@@ -27,7 +26,8 @@ router.use(authenticate)
 async function canViewCpr(user, item) {
   if (!user || !item) return false
   if (String(item.requesterId) === String(user._id)) return true
-  if (await canReviewMcCheck(user)) return canAccessDepartmentItem(user, item)
+  if (await isComplianceUser(user)) return true
+  if (await isElevatedAdmin(user)) return canAccessDepartmentItem(user, item)
   return false
 }
 
@@ -35,10 +35,11 @@ router.get('/', async (req, res, next) => {
   try {
     const compliance = await isComplianceUser(req.user)
     const elevated = await isElevatedAdmin(req.user)
-    const reviewer = compliance || elevated
 
     const filter = {}
-    if (reviewer) {
+    if (compliance) {
+      // Compliance reviews CPR for the whole org, including unscoped / Shared loads.
+    } else if (elevated) {
       Object.assign(filter, departmentFilterForViewer(req.user))
     } else {
       filter.requesterId = req.user._id
@@ -93,7 +94,7 @@ router.post('/:id/review', async (req, res, next) => {
 
     const item = await CprRequest.findById(req.params.id)
     if (!item) return res.status(404).json({ success: false, message: 'CPR request not found' })
-    if (!(await canAccessDepartmentItem(req.user, item))) {
+    if (!(await canViewCpr(req.user, item))) {
       return res.status(403).json({ success: false, message: 'Request is outside your department' })
     }
 
