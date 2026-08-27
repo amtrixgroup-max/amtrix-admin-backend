@@ -15,9 +15,17 @@ import {
   validateLoadDraft,
   validateLoadPost,
 } from '../utils/loadValidation.js'
-import { defaultLoadDocuments, ensureLoadDocuments } from '../utils/loadDocuments.js'
-import { buildLoadDocumentPdf, pdfFilename } from '../utils/loadPdf.js'
+import {
+  accountingDocumentsMessage,
+  accountingDocumentsStatus,
+  defaultLoadDocuments,
+  ensureLoadDocuments,
+  requiredDocumentKeyFromUpload,
+} from '../utils/loadDocuments.js'
+import { convertImageUploadToPdf } from '../utils/imageToPdf.js'
+import { resolveDocumentFile } from '../utils/loadDocumentFile.js'
 import { upsertLoadBillingRecords } from '../utils/loadBilling.js'
+import { upsertCustomerFromLoad } from '../utils/customerFromLoad.js'
 import { LOAD_DOCS_UPLOAD_DIR, uploadLoadDocument } from '../middleware/uploadLoadDocs.js'
 import { sendMail } from '../utils/mailer.js'
 import {
@@ -31,6 +39,7 @@ import {
 } from '../utils/listQuery.js'
 import CprRequest from '../models/CprRequest.js'
 import Department from '../models/Department.js'
+import Role from '../models/Role.js'
 import { cprSummaryFromRequest, notifyCprReviewers } from '../utils/cpr.js'
 import {
   mapTemplateToLoad,
@@ -46,6 +55,40 @@ router.use(authenticate)
 
 const isSuperAdmin = (user) =>
   user?.systemRole === 'SUPER_ADMIN' || user?.role === 'SUPER_ADMIN'
+
+async function getUserRoleName(user) {
+  if (isSuperAdmin(user)) return 'SUPER_ADMIN'
+  if (user?.roleId) {
+    const role = await Role.findById(user.roleId).select('name displayName').lean()
+    const name = role?.name || role?.displayName
+    if (name) return name
+  }
+  return user?.role || user?.roleInfo?.name || ''
+}
+
+async function canSeeAccountingLoads(user) {
+  if (isSuperAdmin(user)) return true
+  const name = String(await getUserRoleName(user) || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+  return name === 'ACCOUNTS' || name === 'ACCOUNT'
+}
+
+function hideSentToAccountingFilter() {
+  return {
+    $and: [
+      { tab: { $ne: 'accounting' } },
+      {
+        $or: [
+          { sentToAccountingAt: { $exists: false } },
+          { sentToAccountingAt: null },
+          { sentToAccountingAt: '' },
+        ],
+      },
+    ],
+  }
+}
 
 function serialize(doc) {
   if (!doc) return null
@@ -547,6 +590,8 @@ router.post('/templates/:id/use', async (req, res, next) => {
           created: created.map((item) => item.id),
         })
       }
+      const customerId = await upsertCustomerFromLoad(payload, req.user.departmentId)
+      if (customerId) payload.customerId = customerId
       const load = await Load.create(payload)
       created.push(serialize(load))
       await logActivity({
@@ -710,7 +755,10 @@ router.post('/bulk', async (req, res, next) => {
 
 router.get('/board-search', async (req, res, next) => {
   try {
-    const loads = await Load.find(userScopeFilter(req.user)).sort({ createdAt: -1 })
+    const showAccounting = await canSeeAccountingLoads(req.user)
+    const loads = await Load.find(
+      andFilter(userScopeFilter(req.user), showAccounting ? {} : hideSentToAccountingFilter()),
+    ).sort({ createdAt: -1 })
     const matched = loads.filter((load) => matchesBoardSearch(load, req.query)).map(serialize)
     res.json({ success: true, data: matched })
   } catch (error) {
@@ -751,8 +799,10 @@ const LOAD_LIST_SELECT =
 router.get('/', async (req, res, next) => {
   try {
     const list = parseListQuery(req.query, { defaultLimit: 50, maxLimit: 100 })
+    const showAccounting = await canSeeAccountingLoads(req.user)
     const filter = andFilter(
       userScopeFilter(req.user),
+      showAccounting ? {} : hideSentToAccountingFilter(),
       loadTabFilter(req.query.tab, req.user),
       loadStatusFilter(req.query.status),
       textSearch(['id', 'customer', 'carrier', 'picks', 'drops', 'reference', 'loadStatus'], list.search),
@@ -783,6 +833,8 @@ router.post('/', async (req, res, next) => {
     if (Object.keys(errors).length) {
       return res.status(400).json(validationResponse(errors))
     }
+    const customerId = await upsertCustomerFromLoad(payload, req.user.departmentId)
+    if (customerId) payload.customerId = customerId
     const load = await Load.create(payload)
     await logActivity({
       req,
@@ -861,6 +913,8 @@ router.put('/:id', async (req, res, next) => {
       payload.tab = tabFromLoadStatus(payload.loadStatus, existing.tab)
     }
 
+    const customerId = await upsertCustomerFromLoad(payload, req.user.departmentId)
+    if (customerId) payload.customerId = customerId
     const load = await Load.findByIdAndUpdate(existing._id, { $set: payload }, { new: true })
     const status = String(load?.loadStatus || '').toLowerCase()
     const previousStatus = String(existing.loadStatus || '').toLowerCase()
@@ -978,6 +1032,10 @@ function serializeDocumentsPayload(load, cpr = null) {
     loadStatus: load.loadStatus || '',
     paperworkOk: Boolean(load.paperworkOk),
     documents: load.documents || [],
+    requiredAccountingDocuments: accountingDocumentsStatus(load.documents || []),
+    missingAccountingDocuments: accountingDocumentsStatus(load.documents || [])
+      .filter((item) => !item.uploaded)
+      .map((item) => item.label),
     emailHistory: load.emailHistory || [],
     documentRequests: load.documentRequests || [],
     lastContact: load.lastContact || '',
@@ -998,26 +1056,6 @@ async function latestCprForLoad(load, paramId) {
   const unique = [...new Set(ids)]
   if (!unique.length) return null
   return CprRequest.findOne({ loadId: { $in: unique } }).sort({ updatedAt: -1, createdAt: -1 })
-}
-
-async function resolveDocumentFile(load, doc) {
-  if (doc.storedName) {
-    const filePath = path.join(LOAD_DOCS_UPLOAD_DIR, path.basename(doc.storedName))
-    if (fs.existsSync(filePath)) {
-      return {
-        buffer: await fs.promises.readFile(filePath),
-        mimeType: doc.mimeType || 'application/octet-stream',
-        filename: doc.originalName || doc.name || 'document',
-      }
-    }
-    if (doc.source === 'Uploaded' || doc.defaulted === false) return null
-  }
-  const buffer = await buildLoadDocumentPdf(load, doc)
-  return {
-    buffer,
-    mimeType: 'application/pdf',
-    filename: pdfFilename(doc, load),
-  }
 }
 
 router.get('/:id/documents', async (req, res, next) => {
@@ -1045,20 +1083,34 @@ router.post('/:id/documents', (req, res, next) => {
     try {
       const load = await findScopedLoad(req)
       if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Choose a PDF or image to upload.' })
+      }
       ensureLoadDocuments(load)
+      if (load.isModified?.('documents')) {
+        await load.save()
+      }
       const body = req.body || {}
-      const file = req.file
+      let file = req.file
+      try {
+        file = await convertImageUploadToPdf(req.file, LOAD_DOCS_UPLOAD_DIR)
+      } catch {
+        file = req.file
+      }
+      const documentTypes = String(body.documentTypes || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+      const typeKey = requiredDocumentKeyFromUpload(documentTypes, body.name)
       const document = {
         id: `DOC-${Date.now()}`,
+        key: typeKey,
         name: String(body.name || file?.originalname || 'Uploaded document').trim(),
-        documentTypes: String(body.documentTypes || '')
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
+        documentTypes,
         description: body.description || '',
         source: 'Uploaded',
         defaulted: false,
-        companyDocument: body.companyDocument === 'true' || body.companyDocument === true,
+        companyDocument: false,
         status: 'Uploaded',
         attachedTo: load.id,
         storedName: file?.filename || '',
@@ -1068,8 +1120,7 @@ router.post('/:id/documents', (req, res, next) => {
         uploadedAt: new Date().toISOString(),
         uploadedBy: req.user.name || req.user.email || '',
       }
-      load.documents = [...(load.documents || []), document]
-      await load.save()
+      await Load.findByIdAndUpdate(load._id, { $push: { documents: document } })
       res.status(201).json({ success: true, data: document })
     } catch (err) {
       next(err)
@@ -1247,6 +1298,11 @@ router.post('/:id/paperwork-ok', async (req, res, next) => {
   try {
     const load = await findScopedLoad(req)
     if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    ensureLoadDocuments(load)
+    const paperworkMessage = accountingDocumentsMessage(load.documents || [])
+    if (paperworkMessage) {
+      return res.status(400).json({ success: false, message: paperworkMessage })
+    }
     load.paperworkOk = true
     load.paperworkOkAt = new Date().toISOString()
     load.paperworkOkBy = req.user.name || req.user.email || ''
@@ -1268,16 +1324,22 @@ router.post('/:id/send-accounting', async (req, res, next) => {
   try {
     const load = await findScopedLoad(req)
     if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
+    ensureLoadDocuments(load)
+    const accountingMessage = accountingDocumentsMessage(load.documents || [])
+    if (accountingMessage) {
+      return res.status(400).json({ success: false, message: accountingMessage })
+    }
     if (!load.paperworkOk) {
-      return res.status(400).json({
-        success: false,
-        message: 'Mark paperwork OK before sending this load to accounting',
-      })
+      load.paperworkOk = true
+      load.paperworkOkAt = new Date().toISOString()
+      load.paperworkOkBy = req.user.name || req.user.email || ''
     }
     load.tab = 'accounting'
     load.loadStatus = load.loadStatus?.toLowerCase().includes('invoice') ? load.loadStatus : 'To Be Billed'
     load.sentToAccountingAt = new Date().toISOString()
     ensureLoadDocuments(load)
+    const customerId = await upsertCustomerFromLoad(load, req.user.departmentId)
+    if (customerId) load.customerId = customerId
     await load.save()
     await upsertLoadBillingRecords(load)
     await logActivity({

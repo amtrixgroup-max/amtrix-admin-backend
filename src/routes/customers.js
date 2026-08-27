@@ -12,6 +12,7 @@ import {
   parseListQuery,
   textSearch,
 } from '../utils/listQuery.js'
+import { syncCustomersFromLoads } from '../utils/customerFromLoad.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -101,13 +102,16 @@ router.get('/', async (req, res, next) => {
     const departmentId = req.query.departmentId
       || (!isSuperAdmin && req.user.departmentId ? req.user.departmentId : null)
 
+    await syncCustomersFromLoads(isSuperAdmin ? null : departmentId)
+
     const filter = {}
     const requestFilter = {}
     if (req.query.departmentId) {
       filter.departmentId = req.query.departmentId
       requestFilter.departmentId = req.query.departmentId
     } else if (accounts && req.user.departmentId) {
-      filter.departmentId = req.user.departmentId
+      const dept = String(req.user.departmentId)
+      filter.$or = [{ departmentId: req.user.departmentId }, { departmentId: dept }]
       requestFilter.departmentId = req.user.departmentId
     } else if (departmentId) {
       requestFilter.departmentId = departmentId

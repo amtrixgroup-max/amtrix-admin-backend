@@ -15,9 +15,9 @@ export const DEFAULT_LOAD_DOCUMENTS = [
   },
   {
     key: 'load-confirmation',
-    name: 'Load Confirmation',
-    documentTypes: ['Load Confirmation'],
-    description: 'Carrier load confirmation with equipment, carrier details, pay items, stops, and terms.',
+    name: 'Carrier Rate Confirmation',
+    documentTypes: ['Carrier Rate Confirmation'],
+    description: 'Carrier rate confirmation with equipment, carrier details, pay items, stops, and terms.',
   },
   {
     key: 'rate-confirmation',
@@ -78,8 +78,8 @@ function migrateDocument(doc = {}) {
 
   if (key === 'rate-confirmation' && (name.includes('carrier') || name.includes('load confirmation'))) {
     next.key = 'load-confirmation'
-    next.name = 'Load Confirmation'
-    next.documentTypes = ['Load Confirmation']
+    next.name = 'Carrier Rate Confirmation'
+    next.documentTypes = ['Carrier Rate Confirmation']
   } else if (key === 'customer-confirmation' || name === 'customer confirmation') {
     next.key = 'rate-confirmation'
     next.name = 'Rate Confirmation'
@@ -92,8 +92,8 @@ function migrateDocument(doc = {}) {
     next.name = 'Invoice'
     next.documentTypes = ['Invoice']
   } else if (key === 'load-confirmation') {
-    next.name = 'Load Confirmation'
-    next.documentTypes = ['Load Confirmation']
+    next.name = 'Carrier Rate Confirmation'
+    next.documentTypes = ['Carrier Rate Confirmation']
   } else if (key === 'rate-confirmation') {
     next.name = 'Rate Confirmation'
     next.documentTypes = ['Rate Confirmation']
@@ -154,4 +154,100 @@ export function ensureLoadDocuments(load) {
   load.documents = existing
   if (changed) load.markModified?.('documents')
   return existing
+}
+
+export const ACCOUNTING_REQUIRED_DOCUMENTS = [
+  {
+    key: 'client-rate-confirmation',
+    label: 'Client Rate Confirmation',
+    type: 'Client Rate Confirmation',
+    hint: 'Upload the client rate confirmation email screenshot. PNG/JPG files are saved as PDF.',
+  },
+  {
+    key: 'pod',
+    label: 'POD (Proof of Delivery)',
+    type: 'POD',
+    hint: 'Upload the proof of delivery screenshot or scan. PNG/JPG files are saved as PDF.',
+  },
+  {
+    key: 'bol',
+    label: 'BOL (Bill of Lading)',
+    type: 'BOL',
+    hint: 'Upload the signed bill of lading. PNG/JPG files are saved as PDF.',
+  },
+]
+
+function docSearchText(doc = {}) {
+  return `${doc.key || ''} ${doc.name || ''} ${(doc.documentTypes || []).join(' ')}`.toLowerCase()
+}
+
+export function isUploadedLoadDocument(doc = {}) {
+  if (String(doc.source || '').toLowerCase() === 'uploaded') return Boolean(doc.storedName)
+  if (doc.defaulted && !doc.storedName) return false
+  if (String(doc.source || '').toLowerCase() === 'system generated') return Boolean(doc.storedName)
+  return Boolean(doc.storedName)
+}
+
+function matchesRequiredDocument(doc, key) {
+  if (String(doc.key || '').toLowerCase() === String(key || '').toLowerCase()) return true
+  const text = docSearchText(doc)
+  if (key === 'client-rate-confirmation') {
+    if (text.includes('client rate')) return true
+    if (String(doc.key || '').toLowerCase() === 'rate-confirmation' && doc.defaulted) return false
+    return text.includes('rate confirmation') && !text.includes('load confirmation')
+  }
+  if (key === 'pod') {
+    return /\bpod\b/.test(text) || text.includes('proof of delivery')
+  }
+  if (key === 'bol') {
+    if (String(doc.key || '').toLowerCase() === 'bol' && doc.defaulted && !doc.storedName) return false
+    if (String(doc.key || '').toLowerCase() === 'blind-bol' && doc.defaulted && !doc.storedName) return false
+    return /\bbol\b/.test(text) || text.includes('bill of lading') || text.includes('bill of landing')
+  }
+  return false
+}
+
+export function accountingDocumentsStatus(documents = []) {
+  const uploaded = (documents || []).filter(isUploadedLoadDocument)
+  return ACCOUNTING_REQUIRED_DOCUMENTS.map((item) => ({
+    key: item.key,
+    label: item.label,
+    type: item.type,
+    hint: item.hint,
+    uploaded: uploaded.some((doc) => matchesRequiredDocument(doc, item.key)),
+  }))
+}
+
+export function missingAccountingDocumentLabels(documents = []) {
+  return accountingDocumentsStatus(documents)
+    .filter((item) => !item.uploaded)
+    .map((item) => item.label)
+}
+
+export function accountingDocumentsMessage(documents = []) {
+  const missing = missingAccountingDocumentLabels(documents)
+  if (!missing.length) return null
+  return `Upload these documents before sending this load to accounting: ${missing.join(', ')}.`
+}
+
+export function invoiceShipperDocumentsMessage(documents = []) {
+  const missing = missingAccountingDocumentLabels(documents)
+  if (!missing.length) return null
+  return `Upload these shipper documents before sending this invoice: ${missing.join(', ')}.`
+}
+
+export function uploadedDocumentForRequirement(documents = [], key) {
+  return (documents || []).filter(isUploadedLoadDocument).find((doc) => matchesRequiredDocument(doc, key)) || null
+}
+
+export function requiredDocumentKeyFromUpload(types = [], name = '') {
+  const haystack = `${(Array.isArray(types) ? types.join(' ') : types) || ''} ${name || ''}`.toLowerCase()
+  const match = ACCOUNTING_REQUIRED_DOCUMENTS.find((item) => {
+    return (
+      haystack.includes(String(item.type).toLowerCase()) ||
+      haystack.includes(String(item.label).toLowerCase()) ||
+      haystack.includes(String(item.key).replace(/-/g, ' '))
+    )
+  })
+  return match?.key || ''
 }
