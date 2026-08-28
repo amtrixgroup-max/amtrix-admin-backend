@@ -1,4 +1,5 @@
 import express from 'express'
+import mongoose from 'mongoose'
 import Department from '../models/Department.js'
 import Role from '../models/Role.js'
 import Permission from '../models/Permission.js'
@@ -52,6 +53,18 @@ async function isDeptAdminUser(user) {
   if (!user.roleId) return false
   const role = await Role.findById(user.roleId).select('name')
   return String(role?.name || '').toUpperCase() === 'DEPT_ADMIN'
+}
+
+async function resolveManagerId(value) {
+  if (value == null || value === '') return null
+  const str = String(value).trim()
+  if (/^[a-fA-F0-9]{24}$/.test(str) && mongoose.isValidObjectId(str)) return str
+  const numeric = Number(str)
+  if (Number.isFinite(numeric) && String(numeric) === str) {
+    const found = await User.findOne({ id: numeric }).select('_id').lean()
+    return found?._id || null
+  }
+  return null
 }
 
 async function applyDeptAdminSystemRole(payload = {}) {
@@ -266,6 +279,9 @@ router.post('/users', requirePermission('USER_CREATE'), async (req, res, next) =
     }
 
     await applyDeptAdminSystemRole(req.body)
+    if (Object.prototype.hasOwnProperty.call(req.body, 'managerId')) {
+      req.body.managerId = await resolveManagerId(req.body.managerId)
+    }
 
     // Enforce password policy only when password provided
     if (req.body.password && !isPasswordValid(req.body.password)) {
@@ -305,6 +321,9 @@ router.put('/users/:id', requirePermission('USER_UPDATE'), async (req, res, next
     }
 
     await applyDeptAdminSystemRole(payload)
+    if (Object.prototype.hasOwnProperty.call(payload, 'managerId')) {
+      payload.managerId = await resolveManagerId(payload.managerId)
+    }
 
     const query = /^[a-f\d]{24}$/i.test(req.params.id)
       ? { _id: req.params.id }

@@ -9,7 +9,7 @@ import { sendMail } from '../utils/mailer.js'
 import { logActivity } from '../utils/activityLog.js'
 import Customer from '../models/Customer.js'
 import { uploadPrepaidPdfs, PREPAID_UPLOAD_DIR } from '../middleware/uploadPrepaid.js'
-import { isComplianceUser } from '../utils/mcCheckAccess.js'
+import { readyToAddRequestIds } from '../utils/customerReadyToAdd.js'
 import {
   andFilter,
   listResponse,
@@ -182,6 +182,15 @@ const pushReviewHistory = (item, { action, actor, notes, creditLimit }) => {
 const sameDepartment = (user, item) =>
   Boolean(user?.departmentId && item?.departmentId && String(user.departmentId) === String(item.departmentId))
 
+const isBrokerUser = async (user) => {
+  if (!user || isSuperAdminUser(user) || user.systemRole === 'ADMIN') return false
+  if (await isElevatedAdmin(user)) return false
+  if (await isAccountsUser(user)) return false
+  if (await isComplianceUser(user)) return false
+  const name = normalizeRole(await getRoleName(user))
+  return name === 'NORMAL_USER' || name === 'USER'
+}
+
 const canViewApprovalRequest = async (user, item) => {
   if (!user || !item) return false
   if (String(item.requesterId) === String(user._id)) return true
@@ -189,6 +198,7 @@ const canViewApprovalRequest = async (user, item) => {
   if (await isElevatedAdmin(user)) return canAccessDepartmentItem(user, item)
   if (await isAccountsUser(user)) return sameDepartment(user, item)
   if (await isComplianceUser(user)) return sameDepartment(user, item)
+  if (await isBrokerUser(user)) return false
   return sameDepartment(user, item)
 }
 
@@ -451,7 +461,17 @@ router.get('/', async (req, res, next) => {
     }
 
     const filter = departmentFilterForViewer(req.user)
-    if (req.query.status) {
+    if (await isBrokerUser(req.user)) {
+      filter.requesterId = req.user._id
+    }
+    const readyToAdd =
+      String(req.query.readyToAdd || '').toLowerCase() === '1' ||
+      String(req.query.readyToAdd || '').toLowerCase() === 'true'
+    if (readyToAdd) {
+      const readyIds = await readyToAddRequestIds(filter)
+      filter._id = { $in: readyIds }
+      filter.status = 'APPROVED'
+    } else if (req.query.status) {
       filter.status = String(req.query.status).toUpperCase()
     }
     const list = parseListQuery(req.query)

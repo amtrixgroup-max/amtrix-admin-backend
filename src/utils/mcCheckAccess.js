@@ -190,16 +190,21 @@ export const findAdminUsers = async () =>
     .populate('roleId', 'name displayName')
     .select('-password')
 
+export const canAssignBrokerTargets = async (user) => {
+  if (!user) return false
+  if (await isElevatedAdmin(user)) return true
+  return isComplianceUser(user)
+}
+
 export const findPendingReviewRecipients = async (departmentId) => {
-  const [compliance, admins, superAdmins] = await Promise.all([
-    findComplianceUsers(departmentId),
-    findAdminUsers(),
-    findSuperAdminUsers(),
-  ])
+  const compliance = await findComplianceUsers(departmentId)
   const seen = new Set()
-  return [...compliance, ...admins, ...superAdmins].filter((user) => {
+  return compliance.filter((user) => {
     const id = String(user?._id || '')
     if (!id || seen.has(id)) return false
+    const roleName = user.roleId?.name || user.role
+    const displayName = user.roleId?.displayName || ''
+    if (!isComplianceRole(roleName, displayName)) return false
     seen.add(id)
     return true
   })

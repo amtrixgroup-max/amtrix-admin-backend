@@ -15,6 +15,8 @@ import { documentKindFromDoc } from '../utils/loadPdf.js'
 import { attachmentFilename, mergePdfBuffers } from '../utils/pdfMerge.js'
 import { sendMail } from '../utils/mailer.js'
 import { logActivity } from '../utils/activityLog.js'
+import { buildAccountsDashboard } from '../utils/accountsDashboard.js'
+import Role from '../models/Role.js'
 import {
   andFilter,
   listResponse,
@@ -28,6 +30,43 @@ const router = express.Router()
 router.use(authenticate)
 
 const COMPANY = 'AP FREIGHT INC'
+
+const normalizeRole = (value) =>
+  String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+
+async function isAccountsUser(user) {
+  if (!user) return false
+  if (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN' || user.systemRole === 'ADMIN') {
+    return false
+  }
+  if (user.roleId) {
+    const role = await Role.findById(user.roleId).select('name displayName').lean()
+    const name = normalizeRole(role?.name)
+    const display = normalizeRole(role?.displayName)
+    if (name === 'ACCOUNTS' || name === 'ACCOUNT' || display === 'ACCOUNTS' || display === 'ACCOUNT') {
+      return true
+    }
+  }
+  const fallback = normalizeRole(user.role)
+  return fallback === 'ACCOUNTS' || fallback === 'ACCOUNT'
+}
+
+function isElevatedAccountingViewer(user) {
+  return (
+    user?.systemRole === 'SUPER_ADMIN' ||
+    user?.role === 'SUPER_ADMIN' ||
+    user?.systemRole === 'ADMIN'
+  )
+}
+
+async function canAccessAccountsDashboard(user) {
+  if (!user) return false
+  if (isElevatedAccountingViewer(user)) return true
+  return isAccountsUser(user)
+}
 
 function toList(docs) {
   return docs.map(serializeInvoice)
@@ -267,6 +306,18 @@ async function buildInvoiceAttachments({ load, combinePdf, prependLoadNumber }) 
     })),
   ]
 }
+
+router.get('/dashboard', async (req, res, next) => {
+  try {
+    if (!(await canAccessAccountsDashboard(req.user))) {
+      return res.status(403).json({ success: false, message: 'Accounts access required' })
+    }
+    const data = await buildAccountsDashboard({ user: req.user, year: req.query.year })
+    res.json({ success: true, data })
+  } catch (error) {
+    next(error)
+  }
+})
 
 router.get('/ar-ap', async (req, res, next) => {
   try {

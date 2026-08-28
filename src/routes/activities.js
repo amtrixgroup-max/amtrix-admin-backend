@@ -1,7 +1,13 @@
 import express from 'express'
 import { authenticate } from '../middleware/auth.js'
 import ActivityLog from '../models/ActivityLog.js'
-import { canViewAllActivityLogs, serializeActivity } from '../utils/activityLog.js'
+import {
+  canViewAllActivityLogs,
+  findUsersByActorRoles,
+  parseActorRoles,
+  serializeActivity,
+  serializeActor,
+} from '../utils/activityLog.js'
 import {
   andFilter,
   listResponse,
@@ -20,6 +26,22 @@ const isGlobalAdmin = (user) =>
   user?.role === 'SUPER_ADMIN' ||
   user?.systemRole === 'ADMIN'
 
+const isMongoId = (value) => /^[a-fA-F0-9]{24}$/.test(String(value || ''))
+
+router.get('/actors', async (req, res, next) => {
+  try {
+    const seeAll = await canViewAllActivityLogs(req.user)
+    if (!seeAll) {
+      return res.status(403).json({ success: false, message: 'Not authorized to list activity actors' })
+    }
+    const roles = parseActorRoles(req.query.role || 'NORMAL_USER,COMPLIANCE')
+    const users = await findUsersByActorRoles(roles, req.user)
+    res.json({ success: true, data: users.map(serializeActor).filter(Boolean) })
+  } catch (error) {
+    next(error)
+  }
+})
+
 router.get('/', async (req, res, next) => {
   try {
     const seeAll = await canViewAllActivityLogs(req.user)
@@ -29,8 +51,27 @@ router.get('/', async (req, res, next) => {
       filter.departmentId = req.user.departmentId
     }
 
+    if (seeAll) {
+      const actorRoles = parseActorRoles(req.query.role || req.query.roles)
+      const requestedUserId = isMongoId(req.query.userId) ? String(req.query.userId) : ''
+      if (actorRoles.length) {
+        const actors = await findUsersByActorRoles(actorRoles, req.user)
+        const allowedIds = actors.map((user) => String(user._id))
+        if (requestedUserId) {
+          filter.userId = allowedIds.includes(requestedUserId) ? requestedUserId : { $in: [] }
+        } else {
+          filter.userId = { $in: actors.map((user) => user._id) }
+        }
+      } else if (requestedUserId) {
+        filter.userId = requestedUserId
+      }
+    }
+
     const list = parseListQuery(req.query, { defaultLimit: seeAll ? 50 : 6, maxLimit: seeAll ? 100 : 6 })
-    const queryFilter = andFilter(filter, textSearch(['action', 'description', 'user', 'module', 'type'], list.search))
+    const queryFilter = andFilter(
+      filter,
+      textSearch(['action', 'description', 'user', 'userEmail', 'module', 'type'], list.search),
+    )
     const capped = list.paginate ? list : { ...list, paginate: true, page: 1, limit: seeAll ? 500 : 6, skip: 0 }
     const { items, total } = await paginateFind(ActivityLog, queryFilter, {
       ...capped,
