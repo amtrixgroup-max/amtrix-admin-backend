@@ -7,18 +7,18 @@ export function customerProfileCompleted(customer) {
 
 export async function readyToAddRequestIds(baseFilter = {}) {
   const requests = await CustomerApprovalRequest.find({ ...baseFilter, status: 'APPROVED' })
-    .select('_id')
+    .select('_id customerId')
     .lean()
-  const ids = requests.map((item) => item._id)
+  const pending = requests.filter((item) => item.customerId == null || item.customerId === '')
+  const ids = pending.map((item) => item._id)
   if (!ids.length) return []
 
-  const customers = await Customer.find({ approvalRequestId: { $in: ids } })
-    .select('approvalRequestId paymentTerms')
+  const idStrings = ids.map((id) => String(id))
+  const customers = await Customer.find({
+    $or: [{ approvalRequestId: { $in: ids } }, { approvalRequestId: { $in: idStrings } }],
+  })
+    .select('approvalRequestId')
     .lean()
-  const completed = new Set(
-    customers
-      .filter((item) => customerProfileCompleted(item))
-      .map((item) => String(item.approvalRequestId)),
-  )
-  return ids.filter((id) => !completed.has(String(id)))
+  const linked = new Set(customers.map((item) => String(item.approvalRequestId)))
+  return ids.filter((id) => !linked.has(String(id)))
 }

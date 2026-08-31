@@ -23,6 +23,7 @@ import {
   requiredDocumentKeyFromUpload,
 } from '../utils/loadDocuments.js'
 import { convertImageUploadToPdf } from '../utils/imageToPdf.js'
+import { userScopeFilter, valuesFor } from '../utils/loadScope.js'
 import { resolveDocumentFile } from '../utils/loadDocumentFile.js'
 import { upsertLoadBillingRecords } from '../utils/loadBilling.js'
 import { upsertCustomerFromLoad } from '../utils/customerFromLoad.js'
@@ -167,19 +168,9 @@ function mergeFilter(...filters) {
   return { $and: parts }
 }
 
-function valuesFor(value) {
-  if (value == null || value === '') return []
-  const str = String(value)
-  const values = [str]
-  if (mongoose.isValidObjectId(str) && str.length === 24) {
-    values.push(new mongoose.Types.ObjectId(str))
-  }
-  return values
-}
-
 function tabFromLoadStatus(status, fallback = 'planning') {
   const value = String(status || '').toLowerCase()
-  if (value.includes('invoice')) return 'accounting'
+  if (value.includes('invoice') || value.includes('to be billed')) return 'accounting'
   if (value.includes('post')) return 'externally-posted'
   if (
     value.includes('ready') ||
@@ -215,34 +206,6 @@ function isSharedRecord(value) {
   const assigned = String(value.assignedUserId || '').trim()
   if (assigned && assigned.toLowerCase() !== 'shared') return false
   return String(value.branch || '').trim().toLowerCase() === 'shared'
-}
-
-function userScopeFilter(user) {
-  if (isSuperAdmin(user)) return {}
-  const userIds = valuesFor(user._id)
-  const departmentIds = valuesFor(user.departmentId)
-  const or = [
-    { createdBy: { $in: userIds } },
-    { assignedUserId: { $in: userIds } },
-    { isShared: true },
-    {
-      $and: [
-        { branch: /^shared$/i },
-        {
-          $or: [
-            { assignedUserId: { $exists: false } },
-            { assignedUserId: '' },
-            { assignedUserId: null },
-          ],
-        },
-      ],
-    },
-    { createdBy: { $exists: false } },
-    { createdBy: '' },
-    { createdBy: null },
-  ]
-  if (departmentIds.length) or.push({ departmentId: { $in: departmentIds } })
-  return { $or: or }
 }
 
 function createLoadDefaults(payload = {}, user = null) {
@@ -776,7 +739,7 @@ function loadTabFilter(tabId, user) {
     active: /ready|driver assigned|dispatched|transit|watch|claim|delivered/i,
     planning: /new|open|planning|pending|needs carrier|needs driver|booked/i,
     'externally-posted': /post/i,
-    accounting: /invoice/i,
+    accounting: /invoice|to be billed/i,
     misc: /cancel|archiv|complet/i,
     ltl: /ltl/i,
   }

@@ -111,7 +111,7 @@ const buildDeptAdminPermissions = (permissionByName, deptCode) => [
 const buildApRoleDefs = (permissionByName) => [
   {
     name: 'NORMAL_USER',
-    displayName: 'Normal User',
+    displayName: 'Broker',
     level: 1,
     subRoles: [],
     permissions: [
@@ -178,7 +178,7 @@ const buildApRoleDefs = (permissionByName) => [
 const buildGenericDeptRoles = (permissionByName, deptCode) => [
   {
     name: 'NORMAL_USER',
-    displayName: 'Normal User',
+    displayName: 'Broker',
     level: 1,
     subRoles: [],
     permissions: [

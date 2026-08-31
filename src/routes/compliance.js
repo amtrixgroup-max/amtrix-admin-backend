@@ -89,6 +89,10 @@ function serializeBroker(user, target = null, extras = {}) {
   const yearlyTarget = paired.yearlyTarget
   const achieved = Number.isFinite(Number(extras.achieved)) ? Math.round(Number(extras.achieved) * 100) / 100 : 0
   const remaining = yearlyTarget != null ? Math.max(0, Math.round((yearlyTarget - achieved) * 100) / 100) : null
+  const previousPaired = pairFromTargets(extras.previousYearMonthlyTarget, extras.previousYearTarget)
+  const previousYearAchieved = Number.isFinite(Number(extras.previousYearAchieved))
+    ? Math.round(Number(extras.previousYearAchieved) * 100) / 100
+    : 0
   return {
     id: user._id,
     name: user.name,
@@ -101,6 +105,8 @@ function serializeBroker(user, target = null, extras = {}) {
     endDate: target?.endDate ?? null,
     achieved,
     remaining,
+    previousYearTarget: previousPaired.yearlyTarget,
+    previousYearAchieved,
     hasTarget: Boolean(paired.monthlyTarget || paired.yearlyTarget),
   }
 }
@@ -209,20 +215,28 @@ router.get('/brokers', async (req, res, next) => {
     })
 
     const userIds = items.map((item) => item._id)
-    const [targets, achievedMap] = await Promise.all([
+    const previousYear = year - 1
+    const [targets, previousTargets, achievedMap, previousAchievedMap] = await Promise.all([
       BrokerTarget.find({ userId: { $in: userIds }, year }).lean(),
+      BrokerTarget.find({ userId: { $in: userIds }, year: previousYear }).lean(),
       yearlyAchievedByUser(items, year),
+      yearlyAchievedByUser(items, previousYear),
     ])
     const targetByUser = new Map(targets.map((doc) => [String(doc.userId), doc]))
+    const previousTargetByUser = new Map(previousTargets.map((doc) => [String(doc.userId), doc]))
 
     res.json(
       listResponse(
-        items.map((item) =>
-          serializeBroker(item, targetByUser.get(String(item._id)) || null, {
+        items.map((item) => {
+          const previous = previousTargetByUser.get(String(item._id))
+          return serializeBroker(item, targetByUser.get(String(item._id)) || null, {
             year,
             achieved: achievedMap.get(String(item._id)) || 0,
-          }),
-        ),
+            previousYearMonthlyTarget: previous?.monthlyTarget,
+            previousYearTarget: previous?.yearlyTarget,
+            previousYearAchieved: previousAchievedMap.get(String(item._id)) || 0,
+          })
+        }),
         { ...list, paginate: true, total },
       ),
     )
@@ -236,15 +250,21 @@ router.get('/brokers/:id/target', async (req, res, next) => {
     const broker = await findBrokerOr404(req, res)
     if (!broker) return
     const year = parseYear(req.query.year)
-    const [target, achievedMap] = await Promise.all([
+    const previousYear = year - 1
+    const [target, previousTarget, achievedMap, previousAchievedMap] = await Promise.all([
       BrokerTarget.findOne({ userId: broker._id, year }).lean(),
+      BrokerTarget.findOne({ userId: broker._id, year: previousYear }).lean(),
       yearlyAchievedByUser([broker], year),
+      yearlyAchievedByUser([broker], previousYear),
     ])
     res.json({
       success: true,
       data: serializeBroker(broker, target, {
         year,
         achieved: achievedMap.get(String(broker._id)) || 0,
+        previousYearMonthlyTarget: previousTarget?.monthlyTarget,
+        previousYearTarget: previousTarget?.yearlyTarget,
+        previousYearAchieved: previousAchievedMap.get(String(broker._id)) || 0,
       }),
     })
   } catch (error) {
@@ -294,12 +314,20 @@ router.put('/brokers/:id/target', async (req, res, next) => {
       },
     })
 
-    const achievedMap = await yearlyAchievedByUser([broker], year)
+    const previousYear = year - 1
+    const [achievedMap, previousTarget, previousAchievedMap] = await Promise.all([
+      yearlyAchievedByUser([broker], year),
+      BrokerTarget.findOne({ userId: broker._id, year: previousYear }).lean(),
+      yearlyAchievedByUser([broker], previousYear),
+    ])
     res.json({
       success: true,
       data: serializeBroker(broker, target, {
         year,
         achieved: achievedMap.get(String(broker._id)) || 0,
+        previousYearMonthlyTarget: previousTarget?.monthlyTarget,
+        previousYearTarget: previousTarget?.yearlyTarget,
+        previousYearAchieved: previousAchievedMap.get(String(broker._id)) || 0,
       }),
     })
   } catch (error) {

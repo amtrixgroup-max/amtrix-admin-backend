@@ -40,7 +40,7 @@ export function serializeActor(user) {
     name: user.name || '',
     email: user.email || '',
     role: compliance ? 'COMPLIANCE' : 'NORMAL_USER',
-    roleLabel: compliance ? 'Compliance' : 'Normal User',
+    roleLabel: compliance ? 'Compliance' : 'Broker',
   }
 }
 

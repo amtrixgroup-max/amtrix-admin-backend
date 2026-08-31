@@ -3,6 +3,8 @@ import Invoice from '../models/Invoice.js'
 import CustomerApprovalRequest from '../models/CustomerApprovalRequest.js'
 import { serializeInvoice } from './invoiceAging.js'
 import { readyToAddRequestIds } from './customerReadyToAdd.js'
+import { andFilter } from './listQuery.js'
+import { userScopeFilter } from './loadScope.js'
 
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const BILLED_STATUSES = new Set(['Sent to Customer', 'Sent via EDI'])
@@ -67,12 +69,11 @@ export async function buildAccountsDashboard({ user, year: yearValue } = {}) {
   const year = parseYear(yearValue)
   const currentYear = new Date().getFullYear()
   const departmentFilter = user?.departmentId ? { departmentId: user.departmentId } : {}
-  const dept = user?.departmentId
-  const toBeBilledFilter = {
-    tab: 'accounting',
-    loadStatus: /^To Be Billed$/i,
-    ...(dept ? { $or: [{ departmentId: dept }, { departmentId: String(dept) }] } : {}),
-  }
+  const toBeBilledFilter = andFilter(
+    userScopeFilter(user),
+    { $or: [{ tab: 'accounting' }, { loadStatus: /invoice|to be billed/i }] },
+    { loadStatus: /^To Be Billed$/i },
+  )
 
   const [
     readyIds,
