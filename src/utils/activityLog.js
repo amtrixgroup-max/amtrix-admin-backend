@@ -9,17 +9,55 @@ const normalizeRole = (value) =>
     .toUpperCase()
     .replace(/\s+/g, '_')
 
+function canonicalActorRole(role) {
+  if (role === 'BROKER' || role === 'USER') return 'NORMAL_USER'
+  if (role === 'DEPARTMENT_ADMIN') return 'DEPT_ADMIN'
+  if (role === 'TEAM_LEADER') return 'TL'
+  if (role === 'ACCOUNT' || role === 'ACCOUNTING') return 'ACCOUNTS'
+  return role
+}
+
 export function parseActorRoles(raw) {
   return [...new Set(
     String(raw || '')
       .split(',')
       .map(normalizeRole)
-      .map((role) => {
-        if (role === 'BROKER' || role === 'USER') return 'NORMAL_USER'
-        return role
-      })
-      .filter((role) => role === 'NORMAL_USER' || role === 'COMPLIANCE'),
+      .map(canonicalActorRole)
+      .filter((role) => role && role !== 'ALL'),
   )]
+}
+
+function actorRoleLabel(role, displayName) {
+  if (role === 'NORMAL_USER') return 'Broker'
+  if (role === 'COMPLIANCE') return 'Compliance'
+  if (role === 'ACCOUNTS') return 'Accounts'
+  if (role === 'DEPT_ADMIN') return 'Department Admin'
+  if (role === 'TL') return 'Team Leader'
+  if (role === 'SUPER_ADMIN') return 'Super Admin'
+  if (role === 'ADMIN') return 'Admin'
+  return displayName || role || 'User'
+}
+
+function resolveActorRole(user) {
+  const roleName = user?.roleId?.name || user?.role || ''
+  const displayName = user?.roleId?.displayName || ''
+  if (user?.systemRole === 'SUPER_ADMIN' || roleName === 'SUPER_ADMIN') return 'SUPER_ADMIN'
+  if (isComplianceRole(roleName, displayName)) return 'COMPLIANCE'
+  if (isNormalUserRole(roleName)) return 'NORMAL_USER'
+  return canonicalActorRole(normalizeRole(roleName || user?.systemRole))
+}
+
+function roleMatchesWanted(user, wanted) {
+  if (!wanted.size) return true
+  const roleName = user?.roleId?.name || user?.role || ''
+  const displayName = user?.roleId?.displayName || ''
+  const resolved = resolveActorRole(user)
+  const name = normalizeRole(roleName)
+  const display = normalizeRole(displayName)
+  if (wanted.has(resolved) || wanted.has(name) || wanted.has(display)) return true
+  if (wanted.has('NORMAL_USER') && isNormalUserRole(roleName)) return true
+  if (wanted.has('COMPLIANCE') && isComplianceRole(roleName, displayName)) return true
+  return false
 }
 
 function isGlobalActivityViewer(user) {
@@ -32,52 +70,32 @@ function isGlobalActivityViewer(user) {
 
 export function serializeActor(user) {
   if (!user) return null
-  const roleName = user.roleId?.name || user.role || ''
+  const role = resolveActorRole(user)
   const displayName = user.roleId?.displayName || ''
-  const compliance = isComplianceRole(roleName, displayName)
   return {
     id: user._id,
     name: user.name || '',
     email: user.email || '',
-    role: compliance ? 'COMPLIANCE' : 'NORMAL_USER',
-    roleLabel: compliance ? 'Compliance' : 'Broker',
+    role,
+    roleLabel: actorRoleLabel(role, displayName),
   }
 }
 
 export async function findUsersByActorRoles(roles, viewer) {
   const wanted = new Set(Array.isArray(roles) ? roles : parseActorRoles(roles))
-  if (!wanted.size) return []
-
-  const roleDocs = await Role.find({}).select('name displayName').lean()
-  const matchingRoleIds = roleDocs
-    .filter((role) => {
-      if (wanted.has('COMPLIANCE') && isComplianceRole(role.name, role.displayName)) return true
-      if (wanted.has('NORMAL_USER') && isNormalUserRole(role.name)) return true
-      return false
-    })
-    .map((role) => role._id)
-
-  const or = []
-  if (matchingRoleIds.length) or.push({ roleId: { $in: matchingRoleIds } })
-  if (wanted.has('NORMAL_USER')) or.push({ role: { $in: ['NORMAL_USER', 'USER'] } })
-  if (wanted.has('COMPLIANCE')) or.push({ role: { $regex: /compliance/i } })
-  if (!or.length) return []
-
-  const filter = {
-    $and: [
-      { $or: or },
-      { systemRole: { $nin: ['SUPER_ADMIN', 'ADMIN'] } },
-    ],
-  }
+  const filter = {}
   if (!isGlobalActivityViewer(viewer) && viewer?.departmentId) {
-    filter.$and.push({ departmentId: viewer.departmentId })
+    filter.departmentId = viewer.departmentId
   }
 
-  return User.find(filter)
-    .select('_id name email role roleId')
+  const users = await User.find(filter)
+    .select('_id name email role systemRole roleId departmentId')
     .populate('roleId', 'name displayName')
     .sort({ name: 1 })
     .lean()
+
+  if (!wanted.size) return users
+  return users.filter((user) => roleMatchesWanted(user, wanted))
 }
 
 export function deviceFromUserAgent(ua = '') {

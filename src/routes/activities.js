@@ -34,7 +34,7 @@ router.get('/actors', async (req, res, next) => {
     if (!seeAll) {
       return res.status(403).json({ success: false, message: 'Not authorized to list activity actors' })
     }
-    const roles = parseActorRoles(req.query.role || 'NORMAL_USER,COMPLIANCE')
+    const roles = parseActorRoles(req.query.role)
     const users = await findUsersByActorRoles(roles, req.user)
     res.json({ success: true, data: users.map(serializeActor).filter(Boolean) })
   } catch (error) {

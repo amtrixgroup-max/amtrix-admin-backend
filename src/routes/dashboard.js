@@ -10,6 +10,7 @@ import {
   serializeDashboardConfig,
   upsertDashboardConfig,
 } from '../utils/dashboardStats.js'
+import { listResponse, paginateFind, parseListQuery } from '../utils/listQuery.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -57,6 +58,25 @@ function parseCardPayload(body = {}) {
   }
 }
 
+function recentLoginFilter(user) {
+  const filter = { lastLoginAt: { $ne: null } }
+  if (!isSuperAdmin(user) && user?.departmentId) {
+    filter.departmentId = user.departmentId
+  }
+  return filter
+}
+
+function serializeRecentLogin(user) {
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.roleId?.name || user.role || user.systemRole,
+    loginTime: user.lastLoginAt,
+    device: deviceFromUserAgent(user.lastLoginUserAgent),
+  }
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const dashboard = await buildDashboardPayload(req)
@@ -65,17 +85,17 @@ router.get('/', async (req, res, next) => {
     const config = superAdmin ? await getDashboardConfig(workspace) : null
     const serialized = superAdmin ? serializeDashboardConfig(config) : null
 
-    const recentActivityDocs = await ActivityLog.find({
-      userId: { $exists: true, $ne: null },
-    })
-      .sort({ timestamp: -1 })
-      .limit(6)
-      .lean()
+    const loginFilter = recentLoginFilter(req.user)
 
-    const loginFilter = { lastLoginAt: { $ne: null } }
+    const activityFilter = { userId: { $exists: true, $ne: null } }
     if (!superAdmin && req.user?.departmentId) {
-      loginFilter.departmentId = req.user.departmentId
+      activityFilter.departmentId = req.user.departmentId
     }
+
+    const recentActivityDocs = await ActivityLog.find(activityFilter)
+      .sort({ timestamp: -1 })
+      .limit(25)
+      .lean()
 
     const recentUsers = await User.find(loginFilter)
       .sort({ lastLoginAt: -1 })
@@ -84,14 +104,7 @@ router.get('/', async (req, res, next) => {
       .select('name email role systemRole lastLoginAt lastLoginUserAgent roleId')
       .lean()
 
-    const recentLogins = recentUsers.map((user) => ({
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.roleId?.name || user.role || user.systemRole,
-      loginTime: user.lastLoginAt,
-      device: deviceFromUserAgent(user.lastLoginUserAgent),
-    }))
+    const recentLogins = recentUsers.map(serializeRecentLogin)
 
     res.json({
       ...dashboard,
@@ -104,6 +117,25 @@ router.get('/', async (req, res, next) => {
       recentActivities: recentActivityDocs.map(serializeActivity),
       recentLogins,
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/recent-logins', async (req, res, next) => {
+  try {
+    const list = parseListQuery(req.query, { defaultLimit: 5, maxLimit: 100 })
+    const filter = recentLoginFilter(req.user)
+    const { items, total } = await paginateFind(User, filter, {
+      ...list,
+      paginate: true,
+      sort: { lastLoginAt: -1 },
+      select: 'name email role systemRole lastLoginAt lastLoginUserAgent roleId',
+      populate: { path: 'roleId', select: 'name displayName' },
+      lean: true,
+    })
+
+    res.json(listResponse(items.map(serializeRecentLogin), { ...list, paginate: true, total }))
   } catch (error) {
     next(error)
   }
