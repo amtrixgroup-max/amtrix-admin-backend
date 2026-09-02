@@ -41,7 +41,12 @@ import {
 import CprRequest from '../models/CprRequest.js'
 import Department from '../models/Department.js'
 import Role from '../models/Role.js'
-import { cprSummaryFromRequest, notifyCprReviewers } from '../utils/cpr.js'
+import {
+  buildCprDetailsFromLoad,
+  cprSummaryFromRequest,
+  normalizeCprDocumentNames,
+  notifyCprReviewers,
+} from '../utils/cpr.js'
 import {
   mapTemplateToLoad,
   parseTemplateUseQuantity,
@@ -1081,7 +1086,9 @@ router.post('/:id/documents', (req, res, next) => {
         mimeType: file?.mimetype || '',
         size: file?.size || 0,
         uploadedAt: new Date().toISOString(),
-        uploadedBy: req.user.name || req.user.email || '',
+        uploadedBy: req.user.name || req.user.email || 'Unknown user',
+        uploadedByEmail: req.user.email || '',
+        uploadedById: req.user._id ? String(req.user._id) : '',
       }
       await Load.findByIdAndUpdate(load._id, { $push: { documents: document } })
       res.status(201).json({ success: true, data: document })
@@ -1374,14 +1381,15 @@ router.post('/:id/cpr-request', async (req, res, next) => {
       departmentCode = department?.code || departmentCode
     }
 
-    const documentNames = (load.documents || []).map((doc) => doc.name).filter(Boolean)
+    const documentNames = normalizeCprDocumentNames((load.documents || []).map((doc) => doc.name).filter(Boolean))
     const notes = String(req.body?.notes || '').trim()
     const request = await CprRequest.create({
       loadId: load.id,
       loadMongoId: load._id,
       customer: load.customer || '',
-      carrier: load.carrier || '',
+      carrier: load.carrier || load.carrierDetails?.name || '',
       documentNames,
+      details: buildCprDetailsFromLoad(load),
       requesterId: req.user._id,
       requesterName: req.user.name || '',
       requesterEmail: req.user.email || '',

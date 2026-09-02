@@ -401,7 +401,7 @@ router.get('/invoices/:id/email', async (req, res, next) => {
           combinePdf: true,
           prependLoadNumber: false,
           subject: `Invoice ${invoiceNumber}${loadId ? ` for load ${loadId}` : ''} from ${COMPANY}`,
-          message: `Hello!\n\nPlease find the attached invoice${loadId ? ` for load ${loadId}` : ''}.\n\nClient Rate Confirmation, BOL, and POD are included with this invoice.\n\nPlease respond to this email if you do not receive, are unable to open, or have any questions about the attached file(s).\n\nThanks,\n${COMPANY}`,
+          message: `Hello!\n\nPlease find the attached invoice${loadId ? ` for load ${loadId}` : ''}.\n\nRate Confirmation, BOL, and POD are included with this invoice.\n\nPlease respond to this email if you do not receive, are unable to open, or have any questions about the attached file(s).\n\nThanks,\n${COMPANY}`,
         },
       },
     })

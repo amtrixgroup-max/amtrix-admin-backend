@@ -159,9 +159,9 @@ export function ensureLoadDocuments(load) {
 export const ACCOUNTING_REQUIRED_DOCUMENTS = [
   {
     key: 'client-rate-confirmation',
-    label: 'Client Rate Confirmation',
-    type: 'Client Rate Confirmation',
-    hint: 'Upload the client rate confirmation email screenshot. PNG/JPG files are saved as PDF.',
+    label: 'Rate Confirmation',
+    type: 'Rate Confirmation',
+    hint: 'Same as client rate confirmation. The generated Rate Confirmation on this load counts; you can also upload a signed copy. PNG/JPG files are saved as PDF.',
   },
   {
     key: 'pod',
@@ -188,13 +188,20 @@ export function isUploadedLoadDocument(doc = {}) {
   return Boolean(doc.storedName)
 }
 
+function isCarrierRateConfirmationDoc(doc = {}) {
+  const key = String(doc.key || '').toLowerCase()
+  const text = docSearchText(doc)
+  return key === 'load-confirmation' || text.includes('carrier rate') || text.includes('load confirmation')
+}
+
 function matchesRequiredDocument(doc, key) {
   if (String(doc.key || '').toLowerCase() === String(key || '').toLowerCase()) return true
   const text = docSearchText(doc)
   if (key === 'client-rate-confirmation') {
-    if (text.includes('client rate')) return true
-    if (String(doc.key || '').toLowerCase() === 'rate-confirmation' && doc.defaulted) return false
-    return text.includes('rate confirmation') && !text.includes('load confirmation')
+    if (isCarrierRateConfirmationDoc(doc)) return false
+    const docKey = String(doc.key || '').toLowerCase()
+    if (docKey === 'rate-confirmation' || docKey === 'client-rate-confirmation') return true
+    return text.includes('client rate') || text.includes('rate confirmation')
   }
   if (key === 'pod') {
     return /\bpod\b/.test(text) || text.includes('proof of delivery')
@@ -208,13 +215,16 @@ function matchesRequiredDocument(doc, key) {
 }
 
 export function accountingDocumentsStatus(documents = []) {
-  const uploaded = (documents || []).filter(isUploadedLoadDocument)
   return ACCOUNTING_REQUIRED_DOCUMENTS.map((item) => ({
     key: item.key,
     label: item.label,
     type: item.type,
     hint: item.hint,
-    uploaded: uploaded.some((doc) => matchesRequiredDocument(doc, item.key)),
+    uploaded: (documents || []).some((doc) => {
+      if (!matchesRequiredDocument(doc, item.key)) return false
+      if (item.key === 'client-rate-confirmation') return true
+      return isUploadedLoadDocument(doc)
+    }),
   }))
 }
 
@@ -242,7 +252,15 @@ export function uploadedDocumentForRequirement(documents = [], key) {
 
 export function requiredDocumentKeyFromUpload(types = [], name = '') {
   const haystack = `${(Array.isArray(types) ? types.join(' ') : types) || ''} ${name || ''}`.toLowerCase()
+  if (
+    (haystack.includes('client rate') || haystack.includes('rate confirmation')) &&
+    !haystack.includes('carrier') &&
+    !haystack.includes('load confirmation')
+  ) {
+    return 'client-rate-confirmation'
+  }
   const match = ACCOUNTING_REQUIRED_DOCUMENTS.find((item) => {
+    if (item.key === 'client-rate-confirmation') return false
     return (
       haystack.includes(String(item.type).toLowerCase()) ||
       haystack.includes(String(item.label).toLowerCase()) ||

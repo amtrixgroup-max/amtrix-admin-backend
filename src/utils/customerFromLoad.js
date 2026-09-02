@@ -43,6 +43,8 @@ function customerPayloadFromLoad(load, fallbackDepartmentId) {
     privateNotes: String(details.privateNotes || '').trim(),
     approvalStatus: 'APPROVED',
     status: 'APPROVED',
+    assignedUserId: String(load?.assignedUserId || load?.createdBy || '').trim(),
+    createdBy: String(load?.createdBy || load?.assignedUserId || '').trim(),
     ...(departmentId ? { departmentId } : {}),
   }
 }
@@ -77,6 +79,10 @@ export async function upsertCustomerFromLoad(load, fallbackDepartmentId) {
     if (existing.departmentId) {
       delete updates.departmentId
     }
+    if (existing.assignedUserId) {
+      delete updates.assignedUserId
+      delete updates.createdBy
+    }
     await Customer.updateOne({ _id: existing._id }, { $set: updates })
     return existing.id || String(existing._id)
   }
@@ -104,7 +110,7 @@ export async function syncCustomersFromLoads(departmentId) {
   }
 
   const loads = await Load.find(loadFilter)
-    .select('customer customerId customerDetails departmentId')
+    .select('customer customerId customerDetails departmentId assignedUserId createdBy')
     .sort({ updatedAt: -1 })
     .limit(500)
     .lean()

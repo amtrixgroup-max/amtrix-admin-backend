@@ -5,7 +5,7 @@ import User from '../models/User.js'
 import { authenticate } from '../middleware/auth.js'
 import { notifyUser } from '../utils/notify.js'
 import { logActivity } from '../utils/activityLog.js'
-import { serializeCprRequest } from '../utils/cpr.js'
+import { buildCprDetailsFromLoad, mergeCprDetails, serializeCprRequest } from '../utils/cpr.js'
 import {
   andFilter,
   listResponse,
@@ -22,6 +22,27 @@ import {
 
 const router = express.Router()
 router.use(authenticate)
+
+async function loadForCpr(item) {
+  if (!item) return null
+  if (item.loadMongoId) {
+    const byMongoId = await Load.findById(item.loadMongoId)
+    if (byMongoId) return byMongoId
+  }
+  if (item.loadId) return Load.findOne({ id: item.loadId })
+  return null
+}
+
+async function serializeCprWithLoad(item) {
+  const load = await loadForCpr(item)
+  const details = mergeCprDetails(item.details, buildCprDetailsFromLoad(load))
+  const payload = serializeCprRequest(item, { details })
+  if (load) {
+    payload.customer = payload.customer || load.customer || ''
+    payload.carrier = payload.carrier || load.carrier || load.carrierDetails?.name || ''
+  }
+  return payload
+}
 
 async function canViewCpr(user, item) {
   if (!user || !item) return false
@@ -65,7 +86,25 @@ router.get('/', async (req, res, next) => {
       statusPriority: ['PENDING'],
       unpaginatedLimit: 300,
     })
-    res.json(listResponse(items.map(serializeCprRequest), { ...list, total }))
+    const loadIds = [...new Set(items.map((item) => item.loadId).filter(Boolean))]
+    const loads = loadIds.length
+      ? await Load.find({ id: { $in: loadIds } }).select('id customer carrier carrierDetails').lean()
+      : []
+    const loadById = new Map(loads.map((load) => [load.id, load]))
+    res.json(
+      listResponse(
+        items.map((item) => {
+          const payload = serializeCprRequest(item)
+          const load = loadById.get(item.loadId)
+          if (load) {
+            payload.customer = payload.customer || load.customer || ''
+            payload.carrier = payload.carrier || load.carrier || load.carrierDetails?.name || ''
+          }
+          return payload
+        }),
+        { ...list, total },
+      ),
+    )
   } catch (error) {
     next(error)
   }
@@ -78,7 +117,7 @@ router.get('/:id', async (req, res, next) => {
     if (!(await canViewCpr(req.user, item))) {
       return res.status(403).json({ success: false, message: 'You cannot view this CPR request' })
     }
-    res.json({ success: true, data: serializeCprRequest(item) })
+    res.json({ success: true, data: await serializeCprWithLoad(item) })
   } catch (error) {
     next(error)
   }
@@ -186,7 +225,7 @@ router.post('/:id/review', async (req, res, next) => {
       module: 'Loads',
     })
 
-    res.json({ success: true, data: serializeCprRequest(item) })
+    res.json({ success: true, data: await serializeCprWithLoad(item) })
   } catch (error) {
     next(error)
   }

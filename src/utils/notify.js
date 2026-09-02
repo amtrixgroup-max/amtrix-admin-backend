@@ -30,7 +30,7 @@ export async function notifyUser({ user, title, message, data, emailSubject, ema
       read: false
     })
 
-    const email = typeof user === 'object' ? user.email : null
+    const email = user && typeof user === 'object' ? user.email : null
     if (email && !skipEmail) {
       await sendMail({
         to: email,
@@ -48,8 +48,13 @@ export async function notifyUser({ user, title, message, data, emailSubject, ema
   }
 }
 
-export async function notifyUsers(users, payload) {
-  const list = Array.isArray(users) ? users.filter(Boolean) : []
+export async function notifyUsers(users, payload, options = {}) {
+  const skip = options.excludeUserId ? String(options.excludeUserId) : ''
+  const list = (Array.isArray(users) ? users : []).filter((user) => {
+    if (!user) return false
+    if (skip && String(user._id || user.id) === skip) return false
+    return true
+  })
   await Promise.all(list.map((user) => notifyUser({ user, ...payload })))
 }
 
@@ -68,13 +73,17 @@ export async function notifyCustomerContact({
     }
 
     const to = String(email || '').trim().toLowerCase()
-    const userEmail = typeof user === 'object' ? String(user.email || '').trim().toLowerCase() : ''
+    const userEmail =
+      user && typeof user === 'object' ? String(user.email || '').trim().toLowerCase() : ''
     if (to && to !== userEmail) {
-      await sendMail({
+      const result = await sendMail({
         to,
         subject: emailSubject || title,
         text: emailText || message
       })
+      if (result?.sent === false || result?.skipped) {
+        console.error('notifyCustomerContact email not sent:', result.message || result.error)
+      }
     }
   } catch (error) {
     console.error('notifyCustomerContact failed:', error?.message || error)

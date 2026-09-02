@@ -96,15 +96,43 @@ const canAccessDepartmentItem = async (user, item) => {
 }
 
 const findAccountsUsers = async (departmentId) => {
-  if (!departmentId) return []
-  const users = await User.find({
-    departmentId,
-    status: { $in: ['ACTIVE', 'Active'] }
-  })
-    .populate('roleId', 'name displayName')
-    .select('-password')
+  const statusFilter = {
+    status: { $nin: ['INACTIVE', 'Inactive', 'DISABLED', 'SUSPENDED', 'Suspended'] },
+  }
+  const queries = [
+    User.find({
+      $or: [{ systemRole: 'SUPER_ADMIN' }, { role: 'SUPER_ADMIN' }],
+      ...statusFilter,
+    })
+      .populate('roleId', 'name displayName')
+      .select('-password'),
+  ]
+  if (departmentId) {
+    const dept = String(departmentId)
+    queries.unshift(
+      User.find({
+        $or: [{ departmentId }, { departmentId: dept }],
+        ...statusFilter,
+      })
+        .populate('roleId', 'name displayName')
+        .select('-password'),
+    )
+  }
+
+  const batches = await Promise.all(queries)
+  const seen = new Set()
+  const users = []
+  for (const batch of batches) {
+    for (const user of batch) {
+      const id = String(user._id)
+      if (seen.has(id)) continue
+      seen.add(id)
+      users.push(user)
+    }
+  }
 
   return users.filter((user) => {
+    if (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN') return true
     const roleName = String(user.roleId?.name || user.role || '')
       .trim()
       .toUpperCase()
@@ -153,16 +181,28 @@ const fallbackReviewHistory = (obj) => {
   return rows
 }
 
+function isPrepaidApproval(item = {}) {
+  const mode = String(item.paymentMode || '').toUpperCase()
+  if (mode.includes('PREPAID')) return true
+  if (item.prepaidRequestedAt) return true
+  const history = Array.isArray(item.reviewHistory) ? item.reviewHistory : []
+  return history.some((entry) => String(entry?.action || '').toUpperCase() === 'PREPAID_SUBMITTED')
+}
+
 const serializeRequest = (doc) => {
   if (!doc) return null
   const obj = doc.toObject ? doc.toObject() : { ...doc }
   const reviewHistory = Array.isArray(obj.reviewHistory) && obj.reviewHistory.length
     ? obj.reviewHistory
     : fallbackReviewHistory(obj)
+  const status = String(obj.status || '').toUpperCase()
+  const prepaidApproved = status === 'APPROVED' && isPrepaidApproval({ ...obj, reviewHistory })
   return {
     ...obj,
     id: obj._id,
     reviewHistory,
+    prepaidApproved,
+    paymentMode: prepaidApproved ? 'PREPAID' : obj.paymentMode || '',
   }
 }
 
@@ -219,9 +259,15 @@ async function syncCustomerFromRequest(request, extras = {}) {
       loadApprovedByCustomer: request.loadApprovedByCustomer,
       departmentId: request.departmentId || undefined,
       branch: request.departmentName || request.departmentCode || '',
+      assignedUserId: request.requesterId ? String(request.requesterId) : '',
+      assignedUserName: request.requesterName || '',
+      assignedUserEmail: request.requesterEmail || '',
+      createdBy: request.requesterId ? String(request.requesterId) : '',
       approvalRequestId: request._id,
       approvalStatus: request.status,
       status: request.status,
+      paymentMode: request.paymentMode || '',
+      paymentTerms: extras.paymentTerms || (String(request.paymentMode).toUpperCase() === 'PREPAID' ? 'Prepaid' : undefined),
       creditLimit:
         request.approvedCredit != null
           ? String(request.approvedCredit)
@@ -266,6 +312,29 @@ async function syncCustomerFromRequest(request, extras = {}) {
   }
 }
 
+function customerApprovalNotifyData(item, { type, action = '', actor = null } = {}) {
+  return {
+    type,
+    action,
+    requestId: String(item?._id || ''),
+    customerId: item?.customerId ? String(item.customerId) : '',
+    status: item?.status || '',
+    companyName: item?.companyName || '',
+    requesterName: item?.requesterName || '',
+    requesterEmail: item?.requesterEmail || '',
+    contactPersonName: item?.contactPersonName || '',
+    requiredLimit: item?.requiredLimit ?? null,
+    approvedCredit: item?.approvedCredit ?? null,
+    reviewNotes: item?.reviewNotes || '',
+    prepaidNotes: item?.prepaidNotes || '',
+    paymentMode: item?.paymentMode || '',
+    departmentName: item?.departmentName || item?.departmentCode || '',
+    actorName: actor?.name || '',
+    actorEmail: actor?.email || '',
+    actorId: actor?._id ? String(actor._id) : '',
+  }
+}
+
 async function notifyReviewOutcome({ item, action, actor }) {
   const actionLabel =
     action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'marked as prepaid'
@@ -285,12 +354,11 @@ async function notifyReviewOutcome({ item, action, actor }) {
   const payload = {
     title: `Customer request ${actionLabel}`,
     message: `Accounts ${actionLabel} the customer request for ${item.companyName}.`,
-    data: {
+    data: customerApprovalNotifyData(item, {
       type: typeMap[action] || 'CUSTOMER_APPROVAL_REVIEW',
-      requestId: String(item._id),
-      status: item.status,
-      action
-    },
+      action,
+      actor,
+    }),
     emailSubject: `[Amtrix] Customer request ${actionLabel} — ${item.companyName}`,
     emailText: reviewMessage
   }
@@ -350,7 +418,6 @@ router.post('/', async (req, res, next) => {
       'agentEmail',
       'companyName',
       'contactPersonName',
-      'dunsNumber',
       'loadApprovedByCustomer',
       'contactPersonNumber',
       'contactPersonEmail',
@@ -413,27 +480,31 @@ router.post('/', async (req, res, next) => {
     try {
       const recipients = await findAccountsUsers(req.user.departmentId)
       if (recipients.length) {
-        await notifyUsers(recipients, {
-          title: 'New customer approval request',
-          message: `${req.user.name || 'A teammate'} submitted a customer approval request for ${request.companyName}.`,
-          data: {
-            type: 'CUSTOMER_APPROVAL_REQUEST',
-            requestId: String(request._id),
-            status: 'PENDING'
+        await notifyUsers(
+          recipients,
+          {
+            title: 'New customer approval request',
+            message: `${req.user.name || 'A teammate'} submitted a customer approval request for ${request.companyName}.`,
+            data: customerApprovalNotifyData(request, {
+              type: 'CUSTOMER_APPROVAL_REQUEST',
+              action: 'submit',
+              actor: req.user,
+            }),
+            emailSubject: `[Amtrix] New customer approval request — ${request.companyName}`,
+            emailText: [
+              `A new customer approval request was submitted in the ${request.departmentName || request.departmentCode || 'department'} workspace.`,
+              '',
+              `Requester: ${request.requesterName} (${request.requesterEmail})`,
+              `Company: ${request.companyName}`,
+              `Contact: ${request.contactPersonName}`,
+              `Required limit: ${request.requiredLimit}`,
+              `DUNS: ${request.dunsNumber}`,
+              '',
+              'Please review this request in Amtrix Admin → Customer Approval Requests.'
+            ].join('\n')
           },
-          emailSubject: `[Amtrix] New customer approval request — ${request.companyName}`,
-          emailText: [
-            `A new customer approval request was submitted in the ${request.departmentName || request.departmentCode || 'department'} workspace.`,
-            '',
-            `Requester: ${request.requesterName} (${request.requesterEmail})`,
-            `Company: ${request.companyName}`,
-            `Contact: ${request.contactPersonName}`,
-            `Required limit: ${request.requiredLimit}`,
-            `DUNS: ${request.dunsNumber}`,
-            '',
-            'Please review this request in Amtrix Admin → Customer Approval Requests.'
-          ].join('\n')
-        })
+          { excludeUserId: req.user._id },
+        )
       }
     } catch (notifyError) {
       console.error('Submit notification failed:', notifyError?.message || notifyError)
@@ -472,7 +543,17 @@ router.get('/', async (req, res, next) => {
       filter._id = { $in: readyIds }
       filter.status = 'APPROVED'
     } else if (req.query.status) {
-      filter.status = String(req.query.status).toUpperCase()
+      const status = String(req.query.status).toUpperCase()
+      if (status === 'PREPAID_APPROVED' || status === 'APPROVED_PREPAID') {
+        filter.status = 'APPROVED'
+        filter.$or = [
+          { paymentMode: { $regex: /^prepaid$/i } },
+          { prepaidRequestedAt: { $ne: null } },
+          { 'reviewHistory.action': 'PREPAID_SUBMITTED' },
+        ]
+      } else {
+        filter.status = status
+      }
     }
     const list = parseListQuery(req.query)
     const queryFilter = andFilter(
@@ -578,28 +659,47 @@ router.post(
 
     try {
       const recipients = await findAccountsUsers(item.departmentId)
+      const prepaidData = customerApprovalNotifyData(item, {
+        type: 'CUSTOMER_APPROVAL_PREPAID_REQUEST',
+        action: 'prepaid-request',
+        actor: req.user,
+      })
       if (recipients.length) {
-        await notifyUsers(recipients, {
-          title: 'Prepaid request submitted',
-          message: `${req.user.name || 'A teammate'} requested prepaid review for ${item.companyName}.`,
-          data: {
-            type: 'CUSTOMER_APPROVAL_PREPAID',
-            requestId: String(item._id),
-            status: 'PREPAID',
-            action: 'prepaid-request'
+        await notifyUsers(
+          recipients,
+          {
+            title: 'Prepaid request submitted',
+            message: `${req.user.name || 'A teammate'} requested prepaid review for ${item.companyName}.`,
+            data: prepaidData,
+            emailSubject: `[Amtrix] Prepaid request — ${item.companyName}`,
+            emailText: [
+              `A prepaid request was submitted after rejection for ${item.companyName}.`,
+              '',
+              `Requested by: ${req.user.name || ''} (${req.user.email || ''})`,
+              `Credit required: ${credit}`,
+              item.prepaidNotes ? `Notes: ${item.prepaidNotes}` : '',
+              `PDFs uploaded: ${files.map((file) => file.originalname).join(', ')}`,
+              '',
+              'Please review this prepaid request in Amtrix Admin → Customer Approval Requests.'
+            ].filter(Boolean).join('\n')
           },
-          emailSubject: `[Amtrix] Prepaid request — ${item.companyName}`,
-          emailText: [
-            `A prepaid request was submitted after rejection for ${item.companyName}.`,
-            '',
-            `Requested by: ${req.user.name || ''} (${req.user.email || ''})`,
-            `Credit required: ${credit}`,
-            item.prepaidNotes ? `Notes: ${item.prepaidNotes}` : '',
-            `PDFs uploaded: ${files.map((file) => file.originalname).join(', ')}`,
-            '',
-            'Please review this prepaid request in Amtrix Admin → Customer Approval Requests.'
-          ].filter(Boolean).join('\n')
-        })
+          { excludeUserId: req.user._id },
+        )
+      }
+      const requesterId = item.requesterId ? String(item.requesterId) : ''
+      const alreadyNotified = recipients.some((user) => String(user._id) === requesterId)
+      if (requesterId && !alreadyNotified) {
+        const requester = await User.findById(item.requesterId).select('-password')
+        if (requester) {
+          await notifyUser({
+            user: requester,
+            title: 'Prepaid request sent',
+            message: `Your prepaid request for ${item.companyName} was submitted to Accounts.`,
+            data: prepaidData,
+            emailSubject: `[Amtrix] Prepaid request sent — ${item.companyName}`,
+            emailText: `Your prepaid request for ${item.companyName} was submitted to Accounts for review.`,
+          })
+        }
       }
     } catch (notifyError) {
       console.error('Prepaid request notification failed:', notifyError?.message || notifyError)
@@ -707,8 +807,14 @@ router.post('/:id/review', async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'A valid credit amount is required to approve' })
       }
 
+      const wasPrepaid =
+        String(item.status).toUpperCase() === 'PREPAID' ||
+        String(item.paymentMode || '').toUpperCase() === 'PREPAID' ||
+        Boolean(item.prepaidRequestedAt)
+
       item.status = 'APPROVED'
       item.approvedCredit = credit
+      if (wasPrepaid) item.paymentMode = 'PREPAID'
     } else {
       if (!['PENDING', 'PREPAID'].includes(item.status)) {
         return res.status(400).json({ success: false, message: 'Only pending or prepaid requests can be rejected' })

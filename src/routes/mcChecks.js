@@ -46,6 +46,24 @@ async function notifyRequester(item, payload) {
   }
 }
 
+function mcCheckNotifyData(item, { type, action = '', actor = null, extra = {} } = {}) {
+  return {
+    type,
+    action,
+    requestId: String(item?._id || ''),
+    status: item?.status || '',
+    mcNo: item?.mcNo || '',
+    dotNo: item?.dotNo || '',
+    equipmentType: item?.equipmentType || '',
+    requesterName: item?.requesterName || '',
+    companyName: identifierLabel(item),
+    actorName: actor?.name || '',
+    actorEmail: actor?.email || '',
+    actorId: actor?._id ? String(actor._id) : '',
+    ...extra,
+  }
+}
+
 async function rejectIfBlockedIdentifier(mcNo, dotNo) {
   const clauses = []
   if (mcNo) clauses.push({ mcNo })
@@ -138,11 +156,11 @@ router.post('/', async (req, res, next) => {
         await notifyUsers(recipients, {
           title: 'New Check MC request',
           message: `${req.user.name || 'A teammate'} submitted a Check MC request for ${identifierLabel(request)}.`,
-          data: {
+          data: mcCheckNotifyData(request, {
             type: 'MC_CHECK_REQUEST',
-            requestId: String(request._id),
-            status: 'PENDING'
-          },
+            action: 'submit',
+            actor: req.user,
+          }),
           ...notifyOptions
         })
       }
@@ -308,12 +326,12 @@ router.post('/:id/review', async (req, res, next) => {
         message: isExceptionReview
           ? `Compliance ${actionLabel} your exception request for ${identifierLabel(item)}.`
           : `Compliance ${actionLabel} your Check MC request for ${identifierLabel(item)}.`,
-        data: {
+        data: mcCheckNotifyData(item, {
           type,
-          requestId: String(item._id),
-          status: item.status,
-          action: approved ? 'approve' : 'reject'
-        }
+          action: approved ? 'approve' : 'reject',
+          actor: req.user,
+          extra: { reviewNotes: notes },
+        }),
       })
     } catch (notifyError) {
       console.error('Check MC review notification failed:', notifyError?.message || notifyError)
@@ -387,11 +405,12 @@ router.post('/:id/exception', async (req, res, next) => {
         await notifyUsers(recipients, {
           title: 'Check MC exception requested',
           message: `${req.user.name || 'A teammate'} requested an exception for ${identifierLabel(item)}.`,
-          data: {
+          data: mcCheckNotifyData(item, {
             type: 'MC_CHECK_EXCEPTION',
-            requestId: String(item._id),
-            status: 'EXCEPTION_PENDING'
-          },
+            action: 'exception',
+            actor: req.user,
+            extra: { reviewNotes: reason },
+          }),
           ...notifyOptions
         })
       }
@@ -449,11 +468,11 @@ router.post('/:id/add-carrier', async (req, res, next) => {
         await notifyUsers(recipients, {
           title: 'Request to Add Carrier',
           message: `${req.user.name || 'A teammate'} requested to add a carrier for ${identifierLabel(item)}.`,
-          data: {
+          data: mcCheckNotifyData(item, {
             type: 'MC_CHECK_ADD_CARRIER',
-            requestId: String(item._id),
-            status: 'ADD_CARRIER_REQUESTED'
-          },
+            action: 'add-carrier',
+            actor: req.user,
+          }),
           ...notifyOptions
         })
       }
@@ -525,17 +544,28 @@ router.post('/:id/revoke', async (req, res, next) => {
     await item.save()
 
     try {
+      const rejectionRevoked = ['REJECTED', 'EXCEPTION_REJECTED'].includes(currentStatus)
       await notifyRequester(item, {
-        title: currentStatus === 'BLOCKED' ? 'Check MC unblocked' : 'Check MC decision revoked',
+        title: currentStatus === 'BLOCKED'
+          ? 'Check MC unblocked'
+          : rejectionRevoked
+            ? 'Check MC rejection revoked'
+            : 'Check MC decision revoked',
         message:
           currentStatus === 'BLOCKED'
             ? `${identifierLabel(item)} is no longer blocked and can be reviewed again.`
-            : `A previous decision on ${identifierLabel(item)} was revoked. The request is open for review again.`,
-        data: {
+            : rejectionRevoked
+              ? `The rejection for ${identifierLabel(item)} was revoked. The request is open again.`
+              : `A previous decision on ${identifierLabel(item)} was revoked. The request is open for review again.`,
+        data: mcCheckNotifyData(item, {
           type: 'MC_CHECK_REVOKED',
-          requestId: String(item._id),
-          status: item.status
-        }
+          action: rejectionRevoked ? 'revoke-rejection' : currentStatus === 'BLOCKED' ? 'unblock' : 'revoke',
+          actor: req.user,
+          extra: {
+            previousStatus: currentStatus,
+            reviewNotes: reason,
+          },
+        }),
       })
     } catch (notifyError) {
       console.error('Check MC revoke notification failed:', notifyError?.message || notifyError)
@@ -600,11 +630,12 @@ router.post('/:id/block', async (req, res, next) => {
       await notifyRequester(item, {
         title: 'MC blocked',
         message: `${identifierLabel(item)} was blocked. ${reason}`,
-        data: {
+        data: mcCheckNotifyData(item, {
           type: 'MC_CHECK_BLOCKED',
-          requestId: String(item._id),
-          status: 'BLOCKED'
-        }
+          action: 'block',
+          actor: req.user,
+          extra: { reviewNotes: reason },
+        }),
       })
     } catch (notifyError) {
       console.error('Check MC block notification failed:', notifyError?.message || notifyError)

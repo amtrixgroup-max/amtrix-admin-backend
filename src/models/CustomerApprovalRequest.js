@@ -22,7 +22,7 @@ const customerApprovalRequestSchema = new mongoose.Schema(
     agentEmail: { type: String, required: true, trim: true, lowercase: true },
     companyName: { type: String, required: true, trim: true },
     contactPersonName: { type: String, required: true, trim: true },
-    dunsNumber: { type: String, required: true, trim: true },
+    dunsNumber: { type: String, default: '', trim: true },
     loadApprovedByCustomer: {
       type: String,
       required: true,

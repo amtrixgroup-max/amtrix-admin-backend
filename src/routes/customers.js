@@ -5,6 +5,10 @@ import Role from '../models/Role.js'
 import { authenticate } from '../middleware/auth.js'
 import { logActivity } from '../utils/activityLog.js'
 import {
+  isElevatedAdmin,
+  isSuperAdminUser,
+} from '../utils/mcCheckAccess.js'
+import {
   andFilter,
   listResponse,
   mongoSort,
@@ -31,14 +35,32 @@ const isAccountsUser = async (user) => {
   return name === 'ACCOUNTS' || name === 'ACCOUNT'
 }
 
+function asId(value) {
+  if (!value) return ''
+  if (typeof value === 'object') return String(value._id || value.id || '')
+  return String(value)
+}
+
+function isPrepaidApproval(item = {}) {
+  const mode = String(item.paymentMode || item.paymentTerms || '').toUpperCase()
+  if (mode.includes('PREPAID')) return true
+  if (item.prepaidRequestedAt) return true
+  const history = Array.isArray(item.reviewHistory) ? item.reviewHistory : []
+  return history.some((entry) => String(entry?.action || '').toUpperCase() === 'PREPAID_SUBMITTED')
+}
+
 function serializeCustomer(doc) {
   if (!doc) return null
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc }
   const raw = String(obj.approvalStatus || obj.status || 'APPROVED').toUpperCase()
   const approvalStatus = raw === 'ACTIVE' ? 'APPROVED' : raw
+  const prepaidApproved = approvalStatus === 'APPROVED' && isPrepaidApproval(obj)
   return {
     ...obj,
     id: obj.id ?? obj._id,
+    assignedUserId: asId(obj.assignedUserId),
+    paymentMode: prepaidApproved ? 'PREPAID' : obj.paymentMode || '',
+    prepaidApproved,
     status: approvalStatus,
     approvalStatus,
   }
@@ -46,6 +68,7 @@ function serializeCustomer(doc) {
 
 function customerFromRequest(request) {
   const obj = typeof request.toObject === 'function' ? request.toObject() : { ...request }
+  const requesterId = asId(obj.requesterId)
   return {
     id: obj.customerId || `req-${obj._id}`,
     name: obj.companyName,
@@ -61,6 +84,9 @@ function customerFromRequest(request) {
     creditLimit: obj.approvedCredit ?? obj.requiredLimit ?? '',
     departmentId: obj.departmentId,
     departmentName: obj.departmentName,
+    assignedUserId: requesterId,
+    assignedUserName: obj.requesterName || '',
+    assignedUserEmail: obj.requesterEmail || '',
     approvalRequestId: obj._id,
     approvalStatus: obj.status,
     status: obj.status,
@@ -71,8 +97,56 @@ function customerFromRequest(request) {
     prepaidCreditRequired: obj.prepaidCreditRequired ?? null,
     prepaidNotes: obj.prepaidNotes || '',
     prepaidDocuments: obj.prepaidDocuments || [],
-    prepaidRequestedAt: obj.prepaidRequestedAt || null
+    prepaidRequestedAt: obj.prepaidRequestedAt || null,
+    paymentMode: obj.paymentMode || '',
+    prepaidApproved: String(obj.status).toUpperCase() === 'APPROVED' && isPrepaidApproval(obj),
   }
+}
+
+async function getViewerScope(user) {
+  const isSuper = isSuperAdminUser(user)
+  const elevated = await isElevatedAdmin(user)
+  const accounts = await isAccountsUser(user)
+  return {
+    isSuper,
+    elevated,
+    accounts,
+    canSeeAllAssigned: isSuper || elevated || accounts,
+    departmentId: user?.departmentId || null,
+    userId: asId(user?._id),
+  }
+}
+
+function applyRequestOverlay(existing, request) {
+  existing.approvalStatus = request.status
+  existing.status = request.status
+  existing.reviewNotes = request.reviewNotes || existing.reviewNotes
+  existing.prepaidCreditRequired = request.prepaidCreditRequired
+  existing.prepaidNotes = request.prepaidNotes
+  existing.prepaidDocuments = request.prepaidDocuments
+  existing.prepaidRequestedAt = request.prepaidRequestedAt
+  existing.approvalRequestId = existing.approvalRequestId || request._id
+  existing.paymentMode = request.paymentMode || existing.paymentMode || ''
+  const requestObj = typeof request.toObject === 'function' ? request.toObject() : request
+  const approved = String(request.status || '').toUpperCase() === 'APPROVED'
+  existing.prepaidApproved = approved && isPrepaidApproval({ ...existing, ...requestObj })
+  if (existing.prepaidApproved) existing.paymentMode = 'PREPAID'
+}
+
+function canAccessAssignedRecord(scope, assignedUserId) {
+  if (scope.canSeeAllAssigned) return true
+  return asId(assignedUserId) === scope.userId
+}
+
+function normalizeAssignment(payload = {}, actor = null) {
+  payload.assignedUserId = asId(payload.assignedUserId)
+  if (payload.assignedUserId && !payload.assignedUserName && payload.branch) {
+    payload.assignedUserName = String(payload.branch)
+  }
+  if (!payload.createdBy && actor?._id) {
+    payload.createdBy = asId(actor._id)
+  }
+  return payload
 }
 
 async function findCustomerByParam(rawId) {
@@ -97,8 +171,9 @@ async function findApprovalRequestByParam(rawId) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const isSuperAdmin = req.user.systemRole === 'SUPER_ADMIN'
-    const accounts = await isAccountsUser(req.user)
+    const scope = await getViewerScope(req.user)
+    const isSuperAdmin = scope.isSuper
+    const accounts = scope.accounts
     const departmentId = req.query.departmentId
       || (!isSuperAdmin && req.user.departmentId ? req.user.departmentId : null)
 
@@ -109,12 +184,17 @@ router.get('/', async (req, res, next) => {
     if (req.query.departmentId) {
       filter.departmentId = req.query.departmentId
       requestFilter.departmentId = req.query.departmentId
-    } else if (accounts && req.user.departmentId) {
+    } else if ((accounts || scope.elevated) && req.user.departmentId) {
       const dept = String(req.user.departmentId)
       filter.$or = [{ departmentId: req.user.departmentId }, { departmentId: dept }]
       requestFilter.departmentId = req.user.departmentId
     } else if (departmentId) {
       requestFilter.departmentId = departmentId
+    }
+
+    if (!scope.canSeeAllAssigned) {
+      filter.assignedUserId = scope.userId
+      requestFilter.requesterId = req.user._id
     }
 
     const list = parseListQuery(req.query)
@@ -135,6 +215,53 @@ router.get('/', async (req, res, next) => {
         sort: mongoSort(req.query.sort || '-createdAt'),
       })
       return res.json(listResponse(items.map(customerFromRequest), { ...list, total }))
+    }
+
+    if (list.paginate && (status === 'PREPAID_APPROVED' || status === 'APPROVED_PREPAID')) {
+      const customerQuery = andFilter(
+        filter,
+        {
+          approvalStatus: { $in: ['APPROVED', 'ACTIVE'] },
+          $or: [
+            { paymentMode: { $regex: /^prepaid$/i } },
+            { paymentTerms: { $regex: /prepaid/i } },
+          ],
+        },
+        searchFilter,
+      )
+      const requestQuery = andFilter(
+        requestFilter,
+        {
+          status: 'APPROVED',
+          $or: [
+            { paymentMode: { $regex: /^prepaid$/i } },
+            { prepaidRequestedAt: { $ne: null } },
+            { 'reviewHistory.action': 'PREPAID_SUBMITTED' },
+          ],
+        },
+        requestSearch,
+      )
+      const [{ items, total }, prepaidRequests] = await Promise.all([
+        paginateFind(Customer, customerQuery, {
+          ...list,
+          sort: mongoSort(req.query.sort || 'name'),
+        }),
+        CustomerApprovalRequest.find(requestQuery).lean(),
+      ])
+      const mapped = items.map(serializeCustomer)
+      for (const request of prepaidRequests) {
+        const existing = mapped.find(
+          (item) =>
+            String(item.approvalRequestId || '') === String(request._id) ||
+            String(item.id) === String(request.customerId || ''),
+        )
+        if (existing) {
+          applyRequestOverlay(existing, request)
+          continue
+        }
+        mapped.push(customerFromRequest(request))
+      }
+      return res.json(listResponse(mapped, { ...list, total: Math.max(total, mapped.length) }))
     }
 
     if (list.paginate) {
@@ -167,14 +294,7 @@ router.get('/', async (req, res, next) => {
               String(item.id) === String(request.customerId || ''),
           )
           if (!existing) continue
-          existing.approvalStatus = request.status
-          existing.status = request.status
-          existing.reviewNotes = request.reviewNotes || existing.reviewNotes
-          existing.prepaidCreditRequired = request.prepaidCreditRequired
-          existing.prepaidNotes = request.prepaidNotes
-          existing.prepaidDocuments = request.prepaidDocuments
-          existing.prepaidRequestedAt = request.prepaidRequestedAt
-          existing.approvalRequestId = existing.approvalRequestId || request._id
+          applyRequestOverlay(existing, request)
         }
       }
       return res.json(listResponse(mapped, { ...list, total }))
@@ -198,14 +318,7 @@ router.get('/', async (req, res, next) => {
           String(item.id) === String(request.customerId || ''),
       )
       if (existing) {
-        existing.approvalStatus = request.status
-        existing.status = request.status
-        existing.reviewNotes = request.reviewNotes || existing.reviewNotes
-        existing.prepaidCreditRequired = request.prepaidCreditRequired
-        existing.prepaidNotes = request.prepaidNotes
-        existing.prepaidDocuments = request.prepaidDocuments
-        existing.prepaidRequestedAt = request.prepaidRequestedAt
-        existing.approvalRequestId = existing.approvalRequestId || request._id
+        applyRequestOverlay(existing, request)
         continue
       }
       if (!linked.has(requestId)) {
@@ -221,8 +334,13 @@ router.get('/', async (req, res, next) => {
 
 router.get('/search', async (req, res, next) => {
   try {
+    const scope = await getViewerScope(req.user)
     const { name, email } = req.query
-    const customers = await Customer.find({ name, email })
+    const filter = { name, email }
+    if (!scope.canSeeAllAssigned) {
+      filter.assignedUserId = scope.userId
+    }
+    const customers = await Customer.find(filter)
     res.json(customers)
   } catch (error) {
     next(error)
@@ -231,12 +349,30 @@ router.get('/search', async (req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
+    const scope = await getViewerScope(req.user)
     const customer = await findCustomerByParam(req.params.id)
     if (customer) {
-      return res.json(serializeCustomer(customer))
+      if (!canAccessAssignedRecord(scope, customer.assignedUserId)) {
+        const linkedRequest = customer.approvalRequestId
+          ? await CustomerApprovalRequest.findById(customer.approvalRequestId).select('requesterId').lean()
+          : null
+        const isRequester = asId(linkedRequest?.requesterId) === scope.userId
+        if (!isRequester) {
+          return res.status(404).json({ error: 'Customer not found' })
+        }
+      }
+      const serialized = serializeCustomer(customer)
+      const linked = customer.approvalRequestId
+        ? await CustomerApprovalRequest.findById(customer.approvalRequestId)
+        : await findApprovalRequestByParam(customer.id)
+      if (linked) applyRequestOverlay(serialized, linked)
+      return res.json(serialized)
     }
     const request = await findApprovalRequestByParam(req.params.id)
     if (request) {
+      if (!canAccessAssignedRecord(scope, request.requesterId)) {
+        return res.status(404).json({ error: 'Customer not found' })
+      }
       return res.json(customerFromRequest(request))
     }
     return res.status(404).json({ error: 'Customer not found' })
@@ -247,7 +383,7 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const payload = { ...req.body }
+    const payload = normalizeAssignment({ ...req.body }, req.user)
     if (payload.id == null || payload.id === '') {
       payload.id = `CUS-${Date.now()}`
     }
@@ -300,7 +436,12 @@ router.put('/:id', async (req, res, next) => {
       return res.status(404).json({ error: 'Customer not found' })
     }
 
-    const payload = { ...req.body }
+    const scope = await getViewerScope(req.user)
+    if (!canAccessAssignedRecord(scope, existing.assignedUserId)) {
+      return res.status(404).json({ error: 'Customer not found' })
+    }
+
+    const payload = normalizeAssignment({ ...req.body }, req.user)
     delete payload._id
 
     const customer = await Customer.findByIdAndUpdate(existing._id, payload, {

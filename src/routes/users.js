@@ -23,6 +23,29 @@ router.get('/', async (req, res, next) => {
   }
 })
 
+router.get('/assignable', async (req, res, next) => {
+  try {
+    const users = await User.find({
+      status: { $nin: ['INACTIVE', 'Inactive', 'DISABLED', 'SUSPENDED', 'Suspended'] },
+    })
+      .select('_id name email')
+      .sort({ name: 1 })
+      .lean()
+
+    res.json({
+      success: true,
+      data: users.map((user) => ({
+        id: String(user._id),
+        _id: String(user._id),
+        name: user.name || '',
+        email: user.email || '',
+      })),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
 router.get('/:id', async (req, res, next) => {
   try {
     const user = await User.findOne({ id: req.params.id }).select('-password')

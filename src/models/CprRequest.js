@@ -7,6 +7,7 @@ const cprRequestSchema = new mongoose.Schema(
     customer: { type: String, default: '' },
     carrier: { type: String, default: '' },
     documentNames: { type: [String], default: [] },
+    details: { type: mongoose.Schema.Types.Mixed, default: {} },
 
     requesterId: {
       type: mongoose.Schema.Types.ObjectId,
