@@ -13,20 +13,48 @@ export function lineTotal(line = {}) {
   return Number(line.rate || 0) * Number(line.quantity || 0)
 }
 
+export function normalizeChargeLine(line = {}, index = 0) {
+  const rate = Number(line.rate)
+  const quantity = Number(line.quantity)
+  return {
+    ...line,
+    id: String(line.id || `line-${Date.now()}-${index}`),
+    company: String(line.company || '').trim(),
+    partyId: line.partyId != null ? String(line.partyId) : '',
+    description: String(line.description || '').trim(),
+    notes: String(line.notes || ''),
+    rate: Number.isFinite(rate) ? rate : 0,
+    quantity: Number.isFinite(quantity) ? quantity : 0,
+    currency: String(line.currency || 'USD').trim() || 'USD',
+    includeOnDocs: Boolean(line.includeOnDocs),
+  }
+}
+
+export function normalizeChargeLines(lines) {
+  if (!Array.isArray(lines)) return []
+  return lines.map((line, index) => normalizeChargeLine(line, index))
+}
+
 export function recalculateFinancials(payload = {}, existing = {}) {
-  const incomeLines = Array.isArray(payload.incomeLines)
-    ? payload.incomeLines
-    : Array.isArray(existing.incomeLines)
-      ? existing.incomeLines
-      : []
-  const expenseLines = Array.isArray(payload.expenseLines)
-    ? payload.expenseLines
-    : Array.isArray(existing.expenseLines)
-      ? existing.expenseLines
-      : []
+  const incomeLines = normalizeChargeLines(
+    Array.isArray(payload.incomeLines)
+      ? payload.incomeLines
+      : Array.isArray(existing.incomeLines)
+        ? existing.incomeLines
+        : [],
+  )
+  const expenseLines = normalizeChargeLines(
+    Array.isArray(payload.expenseLines)
+      ? payload.expenseLines
+      : Array.isArray(existing.expenseLines)
+        ? existing.expenseLines
+        : [],
+  )
   const income = incomeLines.reduce((sum, line) => sum + lineTotal(line), 0)
   const expenses = expenseLines.reduce((sum, line) => sum + lineTotal(line), 0)
   return {
+    incomeLines,
+    expenseLines,
     income,
     expenses,
     profit: income - expenses,
@@ -192,4 +220,81 @@ export function defaultLoadStops() {
       showOn: 'Both',
     },
   ]
+}
+
+export function normalizeStop(stop = {}, index = 0) {
+  const type = String(stop.type || 'other').toLowerCase()
+  const normalizedType = ['pickup', 'delivery', 'other'].includes(type) ? type : 'other'
+  const showOnRaw = String(stop.showOn || 'Both')
+  const showOn =
+    /customer/i.test(showOnRaw) && !/both/i.test(showOnRaw)
+      ? 'Customer'
+      : /carrier/i.test(showOnRaw) && !/both/i.test(showOnRaw)
+        ? 'Carrier'
+        : 'Both'
+  const unloading = Number(stop.unloadingMinutes)
+  return {
+    ...stop,
+    id: String(stop.id || `stop-${normalizedType}-${Date.now()}-${index}`),
+    type: normalizedType,
+    locationId: stop.locationId != null ? String(stop.locationId) : '',
+    location: String(stop.location || stop.locationName || '').trim(),
+    address: String(stop.address || '').trim(),
+    city: String(stop.city || '').trim(),
+    state: String(stop.state || '').trim(),
+    zip: String(stop.zip || '').trim(),
+    country: String(stop.country || 'US').trim() || 'US',
+    scheduled: stop.scheduled || '',
+    scheduledEnd: stop.scheduledEnd || '',
+    useScheduleWindow: Boolean(stop.useScheduleWindow),
+    actual: stop.actual || '',
+    actualArrival: stop.actualArrival || stop.actual || '',
+    actualDeparture: stop.actualDeparture || '',
+    unloadingMinutes: Number.isFinite(unloading) ? unloading : '',
+    contactName: String(stop.contactName || '').trim(),
+    contactPhone: String(stop.contactPhone || '').trim(),
+    appointment: String(stop.appointment || '').trim(),
+    instructions: String(stop.instructions || '').trim(),
+    privateNotes: String(stop.privateNotes || '').trim(),
+    publicNotes: String(stop.publicNotes || '').trim(),
+    cargo: String(stop.cargo || '').trim(),
+    reference: String(stop.reference || '').trim(),
+    showOn,
+    showOnCustomerDocs:
+      stop.showOnCustomerDocs != null
+        ? Boolean(stop.showOnCustomerDocs)
+        : showOn === 'Both' || showOn === 'Customer',
+  }
+}
+
+export function normalizeStops(stops) {
+  if (!Array.isArray(stops)) return []
+  return stops.map((stop, index) => normalizeStop(stop, index))
+}
+
+export function normalizeCarrierDetails(details = {}) {
+  const src = details && typeof details === 'object' ? details : {}
+  return {
+    ...src,
+    name: String(src.name || '').trim(),
+    address: String(src.address || '').trim(),
+    city: String(src.city || '').trim(),
+    state: String(src.state || '').trim(),
+    zip: String(src.zip || '').trim(),
+    docket: String(src.docket || '').trim(),
+    dot: String(src.dot || '').trim(),
+    phone: String(src.phone || '').trim(),
+    email: String(src.email || '').trim(),
+    contactName: String(src.contactName || '').trim(),
+    publicNotes: String(src.publicNotes || ''),
+    privateNotes: String(src.privateNotes || ''),
+    includePublicNotesOnDocs: Boolean(src.includePublicNotesOnDocs),
+    drivers: String(src.drivers || '').trim(),
+    powerUnit: String(src.powerUnit || '').trim(),
+    trailer: String(src.trailer || '').trim(),
+    loadLength: src.loadLength === '' || src.loadLength == null ? '' : Number(src.loadLength) || 0,
+    loadWidth: src.loadWidth === '' || src.loadWidth == null ? 0 : Number(src.loadWidth) || 0,
+    loadHeight: src.loadHeight === '' || src.loadHeight == null ? 0 : Number(src.loadHeight) || 0,
+    grossWeight: src.grossWeight === '' || src.grossWeight == null ? 0 : Number(src.grossWeight) || 0,
+  }
 }

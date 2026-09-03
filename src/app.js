@@ -17,6 +17,7 @@ import carriersRoutes from './routes/carriers.js'
 import accountingRoutes from './routes/accounting.js'
 import loadsRoutes from './routes/loads.js'
 import complianceRoutes from './routes/compliance.js'
+import locationsRoutes from './routes/locations.js'
 import errorHandler from './middleware/errorHandler.js'
 
 const app = express()
@@ -41,6 +42,7 @@ app.use('/api/carriers', carriersRoutes)
 app.use('/api/accounting', accountingRoutes)
 app.use('/api/loads', loadsRoutes)
 app.use('/api/compliance', complianceRoutes)
+app.use('/api/locations', locationsRoutes)
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Amtrix backend running' })

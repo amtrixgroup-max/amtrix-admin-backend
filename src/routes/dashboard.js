@@ -11,6 +11,7 @@ import {
   upsertDashboardConfig,
 } from '../utils/dashboardStats.js'
 import { listResponse, paginateFind, parseListQuery } from '../utils/listQuery.js'
+import { resolveDepartmentScopeFilter } from '../utils/mcCheckAccess.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -58,11 +59,9 @@ function parseCardPayload(body = {}) {
   }
 }
 
-function recentLoginFilter(user) {
+async function recentLoginFilter(user, query = {}) {
   const filter = { lastLoginAt: { $ne: null } }
-  if (!isSuperAdmin(user) && user?.departmentId) {
-    filter.departmentId = user.departmentId
-  }
+  Object.assign(filter, await resolveDepartmentScopeFilter(user, query))
   return filter
 }
 
@@ -85,12 +84,10 @@ router.get('/', async (req, res, next) => {
     const config = superAdmin ? await getDashboardConfig(workspace) : null
     const serialized = superAdmin ? serializeDashboardConfig(config) : null
 
-    const loginFilter = recentLoginFilter(req.user)
+    const loginFilter = await recentLoginFilter(req.user, req.query)
 
     const activityFilter = { userId: { $exists: true, $ne: null } }
-    if (!superAdmin && req.user?.departmentId) {
-      activityFilter.departmentId = req.user.departmentId
-    }
+    Object.assign(activityFilter, await resolveDepartmentScopeFilter(req.user, req.query))
 
     const recentActivityDocs = await ActivityLog.find(activityFilter)
       .sort({ timestamp: -1 })
@@ -124,8 +121,8 @@ router.get('/', async (req, res, next) => {
 
 router.get('/recent-logins', async (req, res, next) => {
   try {
-    const list = parseListQuery(req.query, { defaultLimit: 5, maxLimit: 100 })
-    const filter = recentLoginFilter(req.user)
+    const list = parseListQuery(req.query, { defaultLimit: 6, maxLimit: 100 })
+    const filter = await recentLoginFilter(req.user, req.query)
     const { items, total } = await paginateFind(User, filter, {
       ...list,
       paginate: true,

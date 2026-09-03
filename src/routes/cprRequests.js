@@ -15,7 +15,7 @@ import {
 } from '../utils/listQuery.js'
 import {
   canAccessDepartmentItem,
-  departmentFilterForViewer,
+  resolveDepartmentScopeFilter,
   isElevatedAdmin,
   isComplianceUser,
 } from '../utils/mcCheckAccess.js'
@@ -60,8 +60,9 @@ router.get('/', async (req, res, next) => {
     const filter = {}
     if (compliance) {
       // Compliance reviews CPR for the whole org, including unscoped / Shared loads.
+      Object.assign(filter, await resolveDepartmentScopeFilter(req.user, req.query))
     } else if (elevated) {
-      Object.assign(filter, departmentFilterForViewer(req.user))
+      Object.assign(filter, await resolveDepartmentScopeFilter(req.user, req.query))
     } else {
       filter.requesterId = req.user._id
     }

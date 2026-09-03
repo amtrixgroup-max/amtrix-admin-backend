@@ -14,11 +14,11 @@ export async function resolveUploadedDocumentFile(doc = {}) {
   }
 }
 
-export async function resolveDocumentFile(load, doc) {
+export async function resolveDocumentFile(load, doc, options = {}) {
   const uploaded = await resolveUploadedDocumentFile(doc)
   if (uploaded) return uploaded
   if (doc.source === 'Uploaded' || doc.defaulted === false) return null
-  const buffer = await buildLoadDocumentPdf(load, doc)
+  const buffer = await buildLoadDocumentPdf(load, doc, options)
   return {
     buffer,
     mimeType: 'application/pdf',

@@ -15,16 +15,12 @@ import {
   parseListQuery,
   textSearch,
 } from '../utils/listQuery.js'
+import { resolveDepartmentScopeFilter } from '../utils/mcCheckAccess.js'
 
 const router = express.Router()
 router.use(authenticate)
 
 const genuineFilter = { userId: { $exists: true, $ne: null } }
-
-const isGlobalAdmin = (user) =>
-  user?.systemRole === 'SUPER_ADMIN' ||
-  user?.role === 'SUPER_ADMIN' ||
-  user?.systemRole === 'ADMIN'
 
 const isMongoId = (value) => /^[a-fA-F0-9]{24}$/.test(String(value || ''))
 
@@ -46,10 +42,7 @@ router.get('/', async (req, res, next) => {
   try {
     const seeAll = await canViewAllActivityLogs(req.user)
     const filter = { ...genuineFilter }
-
-    if (!isGlobalAdmin(req.user) && req.user?.departmentId) {
-      filter.departmentId = req.user.departmentId
-    }
+    Object.assign(filter, await resolveDepartmentScopeFilter(req.user, req.query))
 
     if (seeAll) {
       const actorRoles = parseActorRoles(req.query.role || req.query.roles)

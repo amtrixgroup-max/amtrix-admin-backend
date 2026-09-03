@@ -79,8 +79,19 @@ const canSubmitApproval = async (user) => {
   return true
 }
 
-const departmentFilterForViewer = (user) => {
-  if (isSuperAdminUser(user)) return {}
+const departmentFilterForViewer = async (user, query = {}) => {
+  if (isSuperAdminUser(user)) {
+    const requested = String(query.department || query.module || '')
+      .trim()
+      .toUpperCase()
+    if (!requested || requested === 'ALL') return {}
+    const department = await Department.findOne({
+      $or: [{ code: requested }, { name: requested }, { displayName: requested }],
+    })
+      .select('_id')
+      .lean()
+    return department?._id ? { departmentId: department._id } : { departmentId: null }
+  }
   if (user?.departmentId) return { departmentId: user.departmentId }
   return {}
 }
@@ -531,7 +542,7 @@ router.get('/', async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'You cannot view customer approval requests' })
     }
 
-    const filter = departmentFilterForViewer(req.user)
+    const filter = await departmentFilterForViewer(req.user, req.query)
     if (await isBrokerUser(req.user)) {
       filter.requesterId = req.user._id
     }

@@ -65,10 +65,20 @@ function emptyMonthRows() {
   return MONTH_LABELS.map((month) => ({ month, billed: 0, factored: 0 }))
 }
 
-export async function buildAccountsDashboard({ user, year: yearValue } = {}) {
+export async function buildAccountsDashboard({ user, year: yearValue, department } = {}) {
   const year = parseYear(yearValue)
   const currentYear = new Date().getFullYear()
-  const departmentFilter = user?.departmentId ? { departmentId: user.departmentId } : {}
+  let departmentFilter = user?.departmentId ? { departmentId: user.departmentId } : {}
+  if (!user?.departmentId && department) {
+    const { default: Department } = await import('../models/Department.js')
+    const code = String(department).trim().toUpperCase()
+    const dept = await Department.findOne({
+      $or: [{ code }, { name: code }, { displayName: code }],
+    })
+      .select('_id')
+      .lean()
+    if (dept?._id) departmentFilter = { departmentId: dept._id }
+  }
   const toBeBilledFilter = andFilter(
     userScopeFilter(user),
     { $or: [{ tab: 'accounting' }, { loadStatus: /invoice|to be billed/i }] },

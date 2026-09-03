@@ -7,6 +7,12 @@ export const DEFAULT_LOAD_DOCUMENTS = [
       'Bill of lading with customer information, stops, and signature lines at each stop plus the driver.',
   },
   {
+    key: 'bill-of-lading',
+    name: 'Bill of Lading',
+    documentTypes: ['BOL'],
+    description: 'Standard bill of lading with shipper, consignee, and carrier details.',
+  },
+  {
     key: 'blind-bol',
     name: 'Blind Bill of Lading',
     documentTypes: ['BOL'],

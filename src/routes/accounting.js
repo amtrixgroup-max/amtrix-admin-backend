@@ -312,7 +312,11 @@ router.get('/dashboard', async (req, res, next) => {
     if (!(await canAccessAccountsDashboard(req.user))) {
       return res.status(403).json({ success: false, message: 'Accounts access required' })
     }
-    const data = await buildAccountsDashboard({ user: req.user, year: req.query.year })
+    const data = await buildAccountsDashboard({
+      user: req.user,
+      year: req.query.year,
+      department: req.query.department || req.query.module,
+    })
     res.json({ success: true, data })
   } catch (error) {
     next(error)

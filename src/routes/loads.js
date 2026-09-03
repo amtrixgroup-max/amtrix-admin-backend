@@ -10,6 +10,8 @@ import {
   deriveStopSummary,
   firstErrorMessage,
   isPostedLoad,
+  normalizeCarrierDetails,
+  normalizeStops,
   recalculateFinancials,
   resolvedEquipmentType,
   validateLoadDraft,
@@ -52,7 +54,7 @@ import {
   parseTemplateUseQuantity,
   uniqueLoadId,
 } from '../utils/mapTemplateToLoad.js'
-import { canBuildLoad } from '../utils/mcCheckAccess.js'
+import { canBuildLoad, getRoleMeta, isNormalUserRole, isSuperAdminUser } from '../utils/mcCheckAccess.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -70,6 +72,18 @@ async function getUserRoleName(user) {
     if (name) return name
   }
   return user?.role || user?.roleInfo?.name || ''
+}
+
+async function invoicePdfOptions(user) {
+  if (!user || isSuperAdminUser(user) || user.systemRole === 'ADMIN') {
+    return { draftInvoice: false }
+  }
+  const meta = await getRoleMeta(user)
+  const name = String(meta?.name || '').trim().toUpperCase().replace(/\s+/g, '_')
+  if (name === 'ACCOUNTS' || name === 'ACCOUNT' || name === 'DEPT_ADMIN') {
+    return { draftInvoice: false }
+  }
+  return { draftInvoice: isNormalUserRole(meta?.name) }
 }
 
 async function canSeeAccountingLoads(user) {
@@ -154,6 +168,18 @@ function sanitizeTemplatePayload(payload = {}, existing = {}) {
   })
   if (!Array.isArray(rest.stops) || !rest.stops.length) {
     rest.stops = Array.isArray(existing.stops) && existing.stops.length ? existing.stops : defaultLoadStops()
+  } else {
+    rest.stops = normalizeStops(rest.stops)
+  }
+  if (rest.carrierDetails != null) {
+    rest.carrierDetails = normalizeCarrierDetails(rest.carrierDetails)
+  }
+  if (rest.carrierMode != null) {
+    const mode = String(rest.carrierMode || '').toLowerCase()
+    rest.carrierMode = mode === 'own' || mode === 'outside' ? mode : ''
+  }
+  if (rest.stopsRouteFor != null) {
+    rest.stopsRouteFor = String(rest.stopsRouteFor).toLowerCase() === 'customer' ? 'customer' : 'carrier'
   }
   Object.assign(rest, recalculateFinancials(rest, existing), templateStopCounts(rest, existing))
   return rest
@@ -260,7 +286,10 @@ function createLoadDefaults(payload = {}, user = null) {
     temperature: rest.temperature || '',
     lowerTemp: rest.lowerTemp || '',
     upperTemp: rest.upperTemp || '',
-    stops: Array.isArray(rest.stops) && rest.stops.length ? rest.stops : defaultLoadStops(),
+    stops: Array.isArray(rest.stops) ? normalizeStops(rest.stops) : [],
+    carrierMode: rest.carrierMode || (rest.carrier ? 'outside' : ''),
+    stopsRouteFor: String(rest.stopsRouteFor || '').toLowerCase() === 'customer' ? 'customer' : 'carrier',
+    masterLoad: Boolean(rest.masterLoad),
     incomeLines: rest.incomeLines || [],
     expenseLines: rest.expenseLines || [],
     errorMessage: rest.errorMessage || '',
@@ -306,10 +335,27 @@ function mergeLoadData(existing, payload = {}) {
   const money = recalculateFinancials(next, current)
   const stops = deriveStopSummary(next, current)
   const equipmentType = resolvedEquipmentType(next)
+  const normalizedStops = Array.isArray(next.stops) ? normalizeStops(next.stops) : current.stops || defaultLoadStops()
+  const carrierDetails = normalizeCarrierDetails(next.carrierDetails || {})
+  const carrierModeRaw = String(next.carrierMode || '').toLowerCase()
+  const carrierMode =
+    carrierModeRaw === 'own' || carrierModeRaw === 'outside'
+      ? carrierModeRaw
+      : String(next.carrier || '').trim()
+        ? 'outside'
+        : ''
+  const stopsRouteFor = String(next.stopsRouteFor || current.stopsRouteFor || 'carrier').toLowerCase() === 'customer'
+    ? 'customer'
+    : 'carrier'
   return {
     ...next,
     ...money,
     ...stops,
+    stops: normalizedStops,
+    carrierDetails,
+    carrierMode,
+    stopsRouteFor,
+    masterLoad: Boolean(next.masterLoad),
     equipment: equipmentType,
     equipmentType,
   }
@@ -1152,12 +1198,14 @@ router.get('/:id/documents/:docId/file', async (req, res, next) => {
     ensureLoadDocuments(load)
     const doc = (load.documents || []).find((item) => String(item.id) === String(req.params.docId))
     if (!doc) return res.status(404).json({ success: false, message: 'Document not found' })
-    const file = await resolveDocumentFile(load, doc)
+    const file = await resolveDocumentFile(load, doc, await invoicePdfOptions(req.user))
     if (!file) {
       return res.status(404).json({ success: false, message: 'No file is attached to this document' })
     }
     res.setHeader('Content-Type', file.mimeType)
-    res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`)
+    const safeName = String(file.filename || 'document.pdf').replace(/[\r\n"]/g, '')
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`)
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')
     res.setHeader('Cache-Control', 'private, no-store')
     res.setHeader('Content-Length', String(file.buffer.length))
     res.end(file.buffer)
@@ -1208,8 +1256,9 @@ router.post('/:id/documents/:docId/email', async (req, res, next) => {
     ).trim()
 
     const attachments = []
+    const pdfOptions = await invoicePdfOptions(req.user)
     for (const doc of docs) {
-      const file = await resolveDocumentFile(load, doc)
+      const file = await resolveDocumentFile(load, doc, pdfOptions)
       if (file) {
         attachments.push({
           filename: file.filename,

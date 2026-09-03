@@ -758,3 +758,176 @@ export async function buildDashboardPayload(req) {
   if (!broker) return withWorkspace
   return overlayAssignedBrokerTargets(withWorkspace, req.user?._id)
 }
+
+function userAliasIds(user) {
+  const { values } = (() => {
+    const canonical = String(user?._id || user || '')
+    const list = []
+    if (!canonical) return { values: list }
+    list.push(canonical)
+    if (mongoose.isValidObjectId(canonical) && canonical.length === 24) {
+      list.push(new mongoose.Types.ObjectId(canonical))
+    }
+    if (user?.id != null && String(user.id) !== canonical) {
+      list.push(String(user.id))
+      const numeric = Number(user.id)
+      if (Number.isFinite(numeric)) list.push(numeric)
+    }
+    return { values: list }
+  })()
+  return values
+}
+
+/** Aggregate monthly/yearly target vs achieved for a department's brokers (Team view). */
+export async function buildTeamPerformancePayload({ users = [], year: yearValue } = {}) {
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const year = Number.isFinite(Number(yearValue)) ? Number(yearValue) : currentYear
+  const targetYears = []
+  for (let y = currentYear - 4; y <= currentYear; y += 1) targetYears.push(y)
+
+  const brokers = Array.isArray(users) ? users.filter(Boolean) : []
+  const monthlyByYear = {}
+  targetYears.forEach((y) => {
+    monthlyByYear[y] = MONTH_LABELS.map((month) => ({ month, target: 0, achieved: 0 }))
+  })
+  const yearlySeries = targetYears.map((y) => ({ year: String(y), target: 0, achieved: 0 }))
+
+  if (!brokers.length) {
+    return {
+      year,
+      targets: {
+        monthly: { target: 0, achieved: 0, remaining: 0, percentage: 0 },
+        yearly: { target: 0, achieved: 0, remaining: 0, percentage: 0 },
+      },
+      monthlyByYear,
+      yearlySeries,
+      targetYears,
+      targetsConfigured: false,
+      assignedTarget: null,
+      brokerCount: 0,
+    }
+  }
+
+  const userIds = brokers.map((user) => user._id)
+  const aliasToIndex = new Map()
+  const queryIds = []
+  brokers.forEach((user, index) => {
+    userAliasIds(user).forEach((value) => {
+      aliasToIndex.set(String(value), index)
+      queryIds.push(value)
+    })
+  })
+
+  const targetDocs = await BrokerTarget.find({
+    userId: { $in: userIds },
+    year: { $in: targetYears },
+  }).lean()
+
+  let targetsConfigured = false
+  const monthlyTargetByYear = new Map(targetYears.map((y) => [y, 0]))
+  const yearlyTargetByYear = new Map(targetYears.map((y) => [y, 0]))
+
+  targetDocs.forEach((doc) => {
+    const y = Number(doc.year)
+    const monthly = resolvedAssignedMonthly(doc)
+    const yearly = resolvedAssignedYearly(doc)
+    if (monthly || yearly) targetsConfigured = true
+    if (monthly) monthlyTargetByYear.set(y, (monthlyTargetByYear.get(y) || 0) + monthly)
+    if (yearly) yearlyTargetByYear.set(y, (yearlyTargetByYear.get(y) || 0) + yearly)
+  })
+
+  targetYears.forEach((y) => {
+    const monthlyTarget = roundMoney(monthlyTargetByYear.get(y) || 0)
+    const yearlyTarget = roundMoney(yearlyTargetByYear.get(y) || 0)
+    if (monthlyByYear[y]) {
+      monthlyByYear[y] = monthlyByYear[y].map((row) => ({ ...row, target: monthlyTarget }))
+    }
+    const series = yearlySeries.find((row) => Number(row.year) === y)
+    if (series) series.target = yearlyTarget
+  })
+
+  if (queryIds.length) {
+    const loads = await Load.find({
+      $or: [{ createdBy: { $in: queryIds } }, { assignedUserId: { $in: queryIds } }],
+    })
+      .select('createdBy assignedUserId income postedRate creationDate createdAt')
+      .lean()
+
+    const counted = new Set()
+    loads.forEach((load) => {
+      const loadKey = String(load._id || load.id || '')
+      if (loadKey && counted.has(loadKey)) return
+      if (loadKey) counted.add(loadKey)
+      const ownerIndex = [load.createdBy, load.assignedUserId]
+        .map((id) => aliasToIndex.get(String(id || '')))
+        .find((value) => value != null)
+      if (ownerIndex == null) return
+      const date = parseDate(load.creationDate) || parseDate(load.createdAt)
+      if (!date) return
+      const amount = loadRevenue(load)
+      if (amount <= 0) return
+      const y = date.getFullYear()
+      if (monthlyByYear[y]) {
+        monthlyByYear[y][date.getMonth()].achieved += amount
+      }
+      const series = yearlySeries.find((row) => Number(row.year) === y)
+      if (series) series.achieved += amount
+    })
+  }
+
+  const roundedMonthlyByYear = Object.fromEntries(
+    Object.entries(monthlyByYear).map(([y, rows]) => [
+      y,
+      rows.map((row) => ({
+        ...row,
+        target: roundMoney(row.target),
+        achieved: roundMoney(row.achieved),
+      })),
+    ]),
+  )
+
+  const roundedYearlySeries = yearlySeries.map((row) => ({
+    ...row,
+    target: roundMoney(row.target),
+    achieved: roundMoney(row.achieved),
+  }))
+
+  const monthRows = roundedMonthlyByYear[year] || roundedMonthlyByYear[String(year)] || []
+  const monthRow = Number(year) === currentYear ? monthRows[now.getMonth()] : null
+  const yearlyRow = roundedYearlySeries.find((row) => String(row.year) === String(year))
+  const monthlyTarget = monthRow?.target ?? roundMoney(monthlyTargetByYear.get(year) || 0)
+  const monthlyAchieved = monthRow?.achieved ?? 0
+  const yearlyTarget = yearlyRow?.target ?? roundMoney(yearlyTargetByYear.get(year) || 0)
+  const yearlyAchieved = yearlyRow?.achieved ?? 0
+
+  return {
+    year,
+    targets: {
+      monthly: {
+        target: monthlyTarget,
+        achieved: monthlyAchieved,
+        remaining: Math.max(0, roundMoney(monthlyTarget - monthlyAchieved)),
+        percentage: percent(monthlyAchieved, monthlyTarget),
+      },
+      yearly: {
+        target: yearlyTarget,
+        achieved: yearlyAchieved,
+        remaining: Math.max(0, roundMoney(yearlyTarget - yearlyAchieved)),
+        percentage: percent(yearlyAchieved, yearlyTarget),
+      },
+    },
+    monthlyByYear: roundedMonthlyByYear,
+    yearlySeries: roundedYearlySeries,
+    targetYears,
+    targetsConfigured,
+    assignedTarget: targetsConfigured
+      ? {
+          year,
+          monthlyTarget,
+          yearlyTarget,
+        }
+      : null,
+    brokerCount: brokers.length,
+  }
+}

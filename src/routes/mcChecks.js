@@ -25,7 +25,7 @@ import {
   canRevokeOrBlockMcCheck,
   canSubmitMcCheck,
   canViewRequest,
-  departmentFilterForViewer,
+  resolveDepartmentScopeFilter,
   findPendingReviewRecipients,
   identifierLabel,
   isComplianceUser,
@@ -197,7 +197,7 @@ router.get('/', async (req, res, next) => {
 
     const filter = {}
     if (compliance || elevated) {
-      Object.assign(filter, departmentFilterForViewer(req.user))
+      Object.assign(filter, await resolveDepartmentScopeFilter(req.user, req.query))
     } else {
       filter.requesterId = req.user._id
     }

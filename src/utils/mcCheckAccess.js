@@ -1,5 +1,6 @@
 import User from '../models/User.js'
 import Role from '../models/Role.js'
+import Department from '../models/Department.js'
 
 export const PENDING_REVIEW_STATUSES = ['PENDING', 'EXCEPTION_PENDING']
 export const DOT_GATE_STATUSES = ['ADD_CARRIER_REQUESTED']
@@ -122,6 +123,30 @@ export const departmentFilterForViewer = (user) => {
   if (canSeeAllDepartments(user)) return {}
   if (user?.departmentId) return { departmentId: user.departmentId }
   return {}
+}
+
+/** Resolve Mongo department filter for list APIs. Super Admin may pass department/module code. */
+export async function resolveDepartmentScopeFilter(user, query = {}) {
+  if (!canSeeAllDepartments(user)) {
+    return user?.departmentId ? { departmentId: user.departmentId } : {}
+  }
+  const requested = String(query.department || query.module || '')
+    .trim()
+    .toUpperCase()
+  if (!requested || requested === 'ALL') return {}
+  const department = await Department.findOne({
+    $or: [{ code: requested }, { name: requested }, { displayName: requested }],
+  })
+    .select('_id code name displayName')
+    .lean()
+  if (!department?._id) return { departmentId: null }
+  return { departmentId: department._id }
+}
+
+export async function resolveScopedDepartment(user, query = {}) {
+  const filter = await resolveDepartmentScopeFilter(user, query)
+  if (!filter.departmentId) return null
+  return Department.findById(filter.departmentId).select('_id code name displayName').lean()
 }
 
 export const sameDepartment = (user, item) =>

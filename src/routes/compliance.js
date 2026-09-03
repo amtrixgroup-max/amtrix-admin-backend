@@ -5,6 +5,7 @@ import User from '../models/User.js'
 import Role from '../models/Role.js'
 import BrokerTarget from '../models/BrokerTarget.js'
 import Load from '../models/Load.js'
+import Department from '../models/Department.js'
 import { logActivity } from '../utils/activityLog.js'
 import {
   parseListQuery,
@@ -18,9 +19,9 @@ import {
   canAssignBrokerTargets,
   isNormalUserRole,
   isSuperAdminUser,
-  departmentFilterForViewer,
+  resolveDepartmentScopeFilter,
 } from '../utils/mcCheckAccess.js'
-import { buildDashboardPayload } from '../utils/dashboardStats.js'
+import { buildDashboardPayload, buildTeamPerformancePayload } from '../utils/dashboardStats.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -57,9 +58,8 @@ async function brokerRoleIds() {
   return roles.filter((role) => isNormalUserRole(role.name)).map((role) => role._id)
 }
 
-function viewerBrokerFilter(user) {
-  if (isSuperAdminUser(user)) return {}
-  return departmentFilterForViewer(user)
+async function viewerBrokerFilter(user, query = {}) {
+  return resolveDepartmentScopeFilter(user, query)
 }
 
 function roundMoney(value) {
@@ -197,7 +197,7 @@ router.get('/brokers', async (req, res, next) => {
     const list = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 50 })
     const roleIds = await brokerRoleIds()
     const filter = andFilter(
-      viewerBrokerFilter(req.user),
+      await viewerBrokerFilter(req.user, req.query),
       { status: { $in: ['ACTIVE', 'Active'] } },
       roleIds.length ? { roleId: { $in: roleIds } } : { _id: null },
       textSearch(['name', 'email', 'employeeId'], list.search),
@@ -357,6 +357,64 @@ router.get('/brokers/:id/performance', async (req, res, next) => {
         hasTargetData: Boolean(payload.hasTargetData),
         targetsConfigured: Boolean(payload.targetsConfigured),
         assignedTarget: payload.assignedTarget || null,
+      },
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+router.get('/team-performance', async (req, res, next) => {
+  try {
+    const year = parseYear(req.query.year)
+    const scope = await resolveDepartmentScopeFilter(req.user, req.query)
+    if (isSuperAdminUser(req.user) && !req.query.department && !req.query.module && !scope.departmentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select a team (department) to view team performance',
+      })
+    }
+    if (scope.departmentId == null && Object.prototype.hasOwnProperty.call(scope, 'departmentId')) {
+      return res.status(404).json({ success: false, message: 'Department not found' })
+    }
+
+    const roleIds = await brokerRoleIds()
+    const brokers = await User.find(
+      andFilter(
+        scope,
+        { status: { $in: ['ACTIVE', 'Active'] } },
+        roleIds.length ? { roleId: { $in: roleIds } } : { _id: null },
+      ),
+    )
+      .select('name email departmentId id')
+      .populate('departmentId', 'name code displayName')
+      .lean()
+
+    const department =
+      scope.departmentId
+        ? await Department.findById(scope.departmentId).select('_id code name displayName').lean()
+        : brokers[0]?.departmentId || null
+
+    const payload = await buildTeamPerformancePayload({ users: brokers, year })
+    res.json({
+      success: true,
+      data: {
+        team: department
+          ? {
+              id: department._id || department.id,
+              code: department.code || '',
+              name: department.displayName || department.name || department.code || 'Team',
+            }
+          : null,
+        year,
+        targets: payload.targets || {},
+        monthlyByYear: payload.monthlyByYear || {},
+        yearlySeries: payload.yearlySeries || [],
+        targetYears: payload.targetYears || [year],
+        hasTargetData: Boolean(payload.targetsConfigured || payload.targets?.yearly?.achieved),
+        targetsConfigured: Boolean(payload.targetsConfigured),
+        assignedTarget: payload.assignedTarget || null,
+        brokerCount: payload.brokerCount || brokers.length,
       },
     })
   } catch (error) {

@@ -1,173 +1,182 @@
-import fs from 'fs'
+﻿import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import PDFDocument from 'pdfkit'
 import { lineTotal } from './loadValidation.js'
 
-const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '../assets/AP-Freight.png')
-const HAS_LOGO = fs.existsSync(LOGO_PATH)
-
 const COMPANY = {
   legalName: 'AP FREIGHT INC',
-  dispatchName: 'AP DISPATCH',
-  address1: '4460 W SHAW AVE',
-  address2: 'STE 620',
-  address3: 'FRESNO CA 93722-6210',
+  address1: '4460 W SHAW AVE STE 620',
+  address2: 'FRESNO, CA 93722-6210',
   docket: 'MC01117318',
   phone: '(559) 398-5555',
-  dispatchEmail: 'dispatch@apfreightinc.com',
   accountingEmail: 'Accounting@apfreightinc.com',
 }
 
-const PAGE = { width: 612, height: 792 }
-const M = 22
-const RIGHT = PAGE.width - M
-const CONTENT_W = RIGHT - M
-const CONTENT_BOTTOM = 628
-const TEXT = '#000000'
-const LINE = '#000000'
-const MUTED = '#000000'
-const FONT = {
-  load: ['Courier-Bold', 17],
-  header: ['Courier-Bold', 10],
-  label: ['Helvetica', 9],
-  body: ['Courier-Bold', 8.5],
-  bodyReg: ['Courier', 8.5],
-  section: ['Helvetica-Bold', 10],
-  stop: ['Courier-Bold', 10],
-  terms: ['Courier', 8.5],
-  termsBold: ['Courier-Bold', 8.5],
-  pro: ['Helvetica', 10],
-  proTitle: ['Helvetica-Bold', 16],
-  footer: ['Helvetica', 10],
-  footerSmall: ['Helvetica', 7],
-  page: ['Courier-Bold', 12],
+const DUMMY_CARRIER = {
+  name: 'Demo Carrier LLC',
+  address: '1101 Freeman Ave Apt F',
+  city: 'Long Beach',
+  state: 'CA',
+  zip: '90804',
+  docket: 'MC-987654',
+  phone: '(555) 010-2200',
+  email: 'dispatch@democarrier.example',
+  contactName: 'Alex Ramirez',
+  drivers: 'Alex Ramirez',
 }
 
-function setType(doc, style, size) {
-  const [font, defaultSize] = FONT[style] || FONT.body
-  doc.font(font).fontSize(size || defaultSize).fillColor(TEXT)
-  return doc
-}
+const LEFT = 36
+const WIDTH = 540
+const PAGE_BOTTOM = 720
+const HEADER_GRAY = '#5a5a5a'
+const ROW_GRAY = '#f3f3f3'
+const LINE = '#b7b7b7'
+const TEXT = '#111111'
+const MUTED = '#444444'
 
-const CARRIER_TERMS = [
-  'BY ACCEPTING THIS LOAD TENDER CARRIER IS AGREEING TO THE TERMS AND CONDITIONS',
-  '1. CARRIER MUST SEND ALL UPDATES TWICE DAILY (6AM AND 4PM) AND CHECK CALLS VIA EMAIL TO ***dispatch@apfreightinc.com***',
-  '2. CARRIER MUST UPDATE AP FREIGHT WITH CHECK IN AND CHECK OUT TIMES VIA EMAIL TO ****dispatch@apfreightinc.com***',
-  '3. AP FREIGHT WILL PRE-SET ALL PICKUP APTS IN ADVANCE BUT WE MUST TALK TO ALL DRIVERS BEFORE LOADING. TRACKING MUST BE ACCEPTED BEFORE LOAD IS PICKED. IF NOT ACCEPTED $150 FIRST DAY $50/DAY UNTIL DURATION OF LOAD.',
-  '4. CARRIER WILL BE CHARGED $250 FOR RE-SCHEDULING APPOINTMENTS.',
-  '5. CARRIER WILL BE RESPONSIBLE FOR MAKING PICKUP AND DELIVERY APTS ONTIME TO AVOID LATE PICKUP AND DELIVERY FINE. IF LATE TO PICKUP OR DELIVERY WILL VOID LAYOVERS AND $250 MINIMUM LATE FEES.',
-  '6. CARRIER WILL BE RESPONSIBLE FOR ANY OS&D ISSUES AND MUST EMAIL ON ALL REJECTIONS FOR REDELIVERY INFO.',
-  '7. CARRIER WILL BE RESPONSIBLE TO MAINTAIN TEMPERATURE AND CONFIRM TEMPERATURE SETTING WITH AP FREIGHT VIA EMAIL ****dispatch@apfreightinc.com****',
-  '8. IF THE LOAD OR PART OF THE LOAD IS REJECTED DUE TO QUALITY, REDELIVERY FEE WILL APPLY. EMAIL: dispatch@apfreightinc.com ON ALL REJECTIONS RIGHT AWAY WITH COPIES OF THE BOL AND PICTURE OF THE PRODUCT INSIDE THE TRAILER.',
-  '9. IF CARRIER REFUSES TO PICKUP LOAD AFTER BOOKING, HE WILL BE LIABLE TO PAY DIFFERENCE OF LOAD AMOUNT PAID EXTRA TO SOME OTHER CARRIER TO COVER THE LOAD AND $250 FEES.',
-  '10. ANY TEAM LOADS BOOKED SHOULD BE HONOURED BY 2 TEAM DRIVERS. IF A CARRIER SENDS A SOLO INSTEAD OF TEAM, HE WILL BE ONLY PAID THE HALF AMOUNT OF THE LOAD UPON LOAD COMPLETION.',
-  '11. CARRIER WILL BE CHARGED $250 FOR RE-SCHEDULING APPOINTMENTS.',
-  '12. IF THERE IS A REJECTION ON THE LOAD AND HAS TO BE DELIVERED AT A DIFFERENT FACILITY, ORM IS SET AT $2.00 PER MILE AND $100 FOR EXTRA STOP.',
-  '13. No detention will be paid on this load.',
-  '14. TONU is set at $150.00 and Layover is set at $200.00',
-  '15. Please mention VIN# on the rate confirmation.',
-  '16. Failure to accept GPS tracking will lead to $250 deduction.',
-  '17. Failure to proactively complete driver verification using the Trucker Tools link provided by our Compliance Team before the driver checks in will result in a $250 deduction.',
-  '18. Please do not accept any Rate confirmations from any emails having domain other than apfreightinc.com. Please call 559-398-5555 in order to verify just in case you find anything suspicious.',
-  '*** NO LOADS TO BE DOUBLE BROKERED. IF DOUBLE BROKERED THE CARRIER WILL NOT BE PAID FOR THAT LOAD ***',
-  '******ACCOUNTING INSTRUCTIONS BELOW******',
-  '***CARRIER MUST SUBMIT POD ALONG WITH LUMPER RECEIPT WITHIN 24 HOURS TO AVOID $100 LATE SUBMISSION FEE.***',
-  'CARRIER MUST PROVIDE IN AND OUT TIMES ON THE BOL',
-  'MENTION QUICK PAY ON ACTUAL INVOICE AND EMAIL TO AVOID ANY DELAYS IN PAYMENTS.',
-  'QUICK PAY TERMS (FROM DATE OF INVOICE AND COMPLETE PAPERWORK RECEIPT)',
-  '5 % - Next Business Day',
-  '2% - Within 7 Business Days',
-  'STANDARD - 30 Business Days',
-  'IF CARRIER NEEDS TRACKING ON MAILED CHECKS, ADDITIONAL CHARGES WILL BE APPLIED',
-  'In order to process the payment, carrier must include all PODs, Lumper receipt (If any), signed rate confirmation and invoice. Payment will be placed on hold if complete paperwork is not submitted to Accounting@apfreightinc.com',
-  '**** PLEASE EMAIL INVOICES AND PAPERWORK TO Accounting@apfreightinc.com ****',
-  '**** FOR ACCOUNTING RELATED QUESTIONS, PLEASE EMAIL TO Accounting@apfreightinc.com ****',
-  `If carrier wants quick pay, they will have to mail original PODs and invoice to our office address- ${COMPANY.address1}, ${COMPANY.address2}, ${COMPANY.address3}`,
-  'Once original documents are received, payment will be processed.',
-]
+const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../assets')
+const LOGO_PATH = path.join(ASSETS_DIR, 'AP-Freight.png')
+const HAS_LOGO = fs.existsSync(LOGO_PATH)
 
-const INVOICE_TERMS = [
-  'PAYMENTS TERMS- NET 21',
-  'NOTICE OF ASSIGNMENT',
-  'Please send all remittance information and paperwork to Accounting@apfreightinc.com',
-  'In order to process the payment, include all PODs, lumper receipt (if any), signed rate confirmation and invoice.',
-  'Payment will be placed on hold if complete paperwork is not submitted.',
-  `**** PLEASE EMAIL INVOICES AND PAPERWORK TO ${COMPANY.accountingEmail} ****`,
+const LOAD_CONFIRMATION_TERMS = [
+  'Please mention VIN# on the rate confirmation',
+  '1.Please send all Documents and Invoices to to Accounting@apfreightinc.com',
+  '2.It is requested to pick up deliver the load as scheduled to avoid any deductions.',
+  '3.Solely, the carrier is responsible for any damages to the goods during conveyance.',
+  '4.The driver is responsible to check the number of pallets/cases ,seal# mentioned on the BOL and actual pallets loaded on the truck.',
+  '5.Any shortages/damages to the Cargo are to be reported immediately to the concerned dispatcher. The rate agreed is final in all terms.',
+  '6.There will be a deduction of $250 for any missed appointments .',
+  '7.No Detention at shipper or receiver until unless mentioned in the agreement',
+  '8. By signing the rate confirmation carrier agrees that the truck hauling this load is covered under their insurance.',
+  '8.Please do not accept any Rate confirmations from any emails having domain other than apfreightinc.com .Please call 559-398-5555 in order to verify just in case you find anything suspicious.',
+  '9. Failure to accept GPS tracking will lead to $250 deduction',
+  '10. Failure to proactively complete driver verification using the Trucker Tools link provided by our Compliance Team before the driver checks in will result in a $250 deduction.',
 ]
 
 function blank(value) {
-  return String(value ?? '').trim()
+  const text = String(value ?? '').trim()
+  return text
+}
+
+function moneyAmount(value) {
+  return `$ ${Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
 }
 
 function moneyPlain(value) {
-  return Number(value || 0).toFixed(2)
+  return Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    useGrouping: false,
+  })
 }
 
-function formatDay2(value) {
+function formatDay(value) {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     const text = String(value)
     if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
       const [year, month, day] = text.slice(0, 10).split('-')
-      return `${month}/${day}/${year.slice(2)}`
+      return `${month}/${day}/${year}`
     }
-    return text.slice(0, 8)
+    return text.slice(0, 10)
   }
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
-  const year = String(date.getFullYear()).slice(2)
-  return `${month}/${day}/${year}`
+  return `${month}/${day}/${date.getFullYear()}`
 }
 
-function formatStamp(value) {
-  const date = value ? new Date(value) : new Date()
-  const source = Number.isNaN(date.getTime()) ? new Date() : date
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
-      month: '2-digit',
-      day: '2-digit',
-      year: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).formatToParts(source)
-    const get = (type) => parts.find((part) => part.type === type)?.value || ''
-    return `${get('month')}/${get('day')}/${get('year')} ${get('hour')}:${get('minute')}:${get('second')} (EST)`
-  } catch {
-    const month = String(source.getMonth() + 1).padStart(2, '0')
-    const day = String(source.getDate()).padStart(2, '0')
-    const year = String(source.getFullYear()).slice(2)
-    const hours = String(source.getHours()).padStart(2, '0')
-    const minutes = String(source.getMinutes()).padStart(2, '0')
-    const seconds = String(source.getSeconds()).padStart(2, '0')
-    return `${month}/${day}/${year} ${hours}:${minutes}:${seconds} (EST)`
-  }
+function formatShortDay(value) {
+  const full = formatDay(value)
+  if (!full || full.length < 10) return full
+  return `${full.slice(0, 6)}${full.slice(8)}`
 }
 
-function formatAppt(value) {
+function formatDateTime(value) {
   if (!value) return ''
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return String(value).replace('T', ' ').slice(0, 16)
-  }
-  const hours = String(date.getHours()).padStart(2, '0')
+  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(0, 16)
+  const day = formatDay(date)
+  let hours = date.getHours()
   const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${formatDay2(date)} @ ${hours}:${minutes}`
+  const ampm = hours >= 12 ? 'PM' : 'AM'
+  hours = hours % 12 || 12
+  return `${day} ${hours}:${minutes} ${ampm}`
 }
 
-function cityStateZip(details = {}) {
-  const stateZip = [details.state, details.zip || details.postalCode].filter(Boolean).join(' ')
-  return [details.city, stateZip].filter(Boolean).join(' ')
+function declaredValue(load) {
+  const raw = load.declaredValue
+  if (raw == null || raw === '') return ''
+  const number = Number(String(raw).replace(/[^0-9.-]/g, ''))
+  if (!Number.isFinite(number)) return String(raw)
+  return number.toFixed(2)
+}
+
+function weightText(load) {
+  const weight = blank(load.weight)
+  if (!weight) return ''
+  if (/\b(lbs?|kg)\b/i.test(weight)) return weight
+  return `${weight} ${load.weightUnit || 'lbs'}`
+}
+
+function distanceText(load) {
+  const value = load.distance ?? load.miles ?? load.totalMiles
+  if (value == null || value === '') return '0 miles'
+  const text = String(value)
+  if (/mile/i.test(text)) return text
+  return `${text} miles`
+}
+
+function referenceText(load) {
+  const value = blank(
+    load.reference || load.loadReference || load.customerDetails?.customerReference,
+  )
+  return value
 }
 
 function mcText(value) {
   const text = blank(value)
   if (!text) return ''
-  return text.replace(/^mc\s*-?/i, '').trim()
+  if (/^(mc|dot|ff)/i.test(text)) return text
+  return `MC${text}`
+}
+
+function actionLabel(type) {
+  const value = String(type || 'stop').toLowerCase()
+  if (value === 'pickup') return 'Pickup'
+  if (value === 'delivery') return 'Delivery'
+  if (value === 'other') return 'Other'
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function cityStateZip(details = {}) {
+  const stateZip = [details.state, details.zip || details.postalCode].filter(Boolean).join(' ')
+  return [details.city, stateZip].filter(Boolean).join(', ')
+}
+
+function addressLines(details = {}, name = '') {
+  const lines = []
+  if (name) lines.push(name)
+  const street = blank(details.address || details.billingAddress || details.street)
+  if (street) {
+    street
+      .split(/\n/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .forEach((part) => {
+        if (!lines.includes(part)) lines.push(part)
+      })
+  }
+  const cityLine = cityStateZip(details)
+  if (cityLine) lines.push(cityLine)
+  if (details.country && !['US', 'USA', 'United States'].includes(String(details.country))) {
+    lines.push(details.country)
+  }
+  return lines
 }
 
 function customerDetails(load) {
@@ -176,7 +185,10 @@ function customerDetails(load) {
 
 function carrierDetails(load) {
   const details = load.carrierDetails || {}
-  return { ...details, name: load.carrier || details.name || '' }
+  if (blank(load.carrier) && blank(details.name)) {
+    return { ...DUMMY_CARRIER, ...details, name: DUMMY_CARRIER.name }
+  }
+  return { ...details, name: load.carrier || details.name }
 }
 
 function incomeLines(load) {
@@ -186,7 +198,7 @@ function incomeLines(load) {
   if (lines.length) return lines
   const amount = Number(load.income || load.postedRate || 0)
   if (!amount) return []
-  return [{ description: 'LINE HAUL RATE', notes: '', quantity: 1, rate: amount }]
+  return [{ description: 'Flat Rate', notes: '', quantity: 1, rate: amount }]
 }
 
 function expenseLines(load) {
@@ -196,47 +208,12 @@ function expenseLines(load) {
   if (lines.length) return lines
   const amount = Number(load.expenses || 0)
   if (!amount) return []
-  return [{ description: 'LINE HAUL RATE', notes: '', quantity: 1, rate: amount }]
+  return [{ description: 'Flat Rate', notes: '', quantity: 1, rate: amount }]
 }
 
 function loadStops(load) {
-  return Array.isArray(load.stops) ? load.stops : []
-}
-
-function milesNumber(load) {
-  const value = load.distance ?? load.miles ?? load.totalMiles
-  if (value == null || value === '') return ''
-  return String(value).replace(/[^\d.]/g, '')
-}
-
-function sizeAndType(load) {
-  const length = blank(load.equipmentLength)
-  const type = blank(load.equipmentType || load.equipment)
-  if (length && type) {
-    const prefix = /['′]/.test(length) ? length : `${length}'`
-    return `${prefix} ${type}`.toUpperCase()
-  }
-  return (type || length).toUpperCase()
-}
-
-function tempLine(load) {
-  const lower = blank(load.lowerTemp)
-  const upper = blank(load.upperTemp)
-  const temp = blank(load.temperature)
-  if (lower && upper) {
-    const precool = temp ? ` PRECOOL ${temp}` : ''
-    return `* TEMP RANGE ${lower} TO ${upper}${precool} *`
-  }
-  if (temp) return `* TEMP ${temp} *`
-  return ''
-}
-
-function documentTitle(kind) {
-  if (kind === 'invoice') return 'Invoice'
-  if (kind === 'bol') return 'Bill of Lading'
-  if (kind === 'blind-bol') return 'Blind Bill of Lading'
-  if (kind === 'load-confirmation') return 'Rate Confirmation'
-  return 'Rate Confirmation'
+  if (Array.isArray(load.stops) && load.stops.length) return load.stops
+  return []
 }
 
 export function documentKindFromDoc(doc = {}) {
@@ -248,6 +225,7 @@ export function documentKindFromDoc(doc = {}) {
 
   if (key === 'blind-bol' || blob.includes('blind')) return 'blind-bol'
   if (key === 'invoice' || blob.includes('invoice') || blob.includes('billing')) return 'invoice'
+  if (key === 'bill-of-lading' || (name === 'bill of lading' && !blob.includes('stop'))) return 'bill-of-lading'
   if (
     key === 'load-confirmation' ||
     blob.includes('load confirmation') ||
@@ -269,420 +247,527 @@ export function documentKindFromDoc(doc = {}) {
   return 'bol'
 }
 
+function loadNumberForFilename(load = {}) {
+  const digits = String(load.id || load.loadNo || '').replace(/\D/g, '')
+  return digits || String(load.id || 'load').replace(/[^\w.-]+/g, '_')
+}
+
+function fileStamp(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date)
+  const safe = Number.isNaN(value.getTime()) ? new Date() : value
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${safe.getFullYear()}${pad(safe.getMonth() + 1)}${pad(safe.getDate())}${pad(safe.getHours())}${pad(safe.getMinutes())}${pad(safe.getSeconds())}`
+}
+
 export function pdfFilename(doc = {}, load = {}) {
   const kind = documentKindFromDoc(doc)
-  const loadId = String(load.id || 'load').replace(/[^\w.-]+/g, '_')
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)
+  const loadId = loadNumberForFilename(load)
+  const stamp = fileStamp()
   const names = {
     bol: `bill_of_lading_with_stop_signatures_${loadId}_${stamp}.pdf`,
+    'bill-of-lading': `bill_of_lading_${loadId}_${stamp}.pdf`,
     'blind-bol': `blind_bill_of_lading_${loadId}_${stamp}.pdf`,
-    'load-confirmation': `Carrier_Rate_Confirmation_${loadId}_${stamp}.pdf`,
+    'load-confirmation': `Load_Confirmation_${loadId}_${stamp}.pdf`,
     'rate-confirmation': `rate_confirm_${loadId}_${stamp}.pdf`,
     invoice: `load_invoice_${loadId}_${stamp}.pdf`,
   }
-  return names[kind] || `${String(doc.name || 'document').replace(/[^\w.-]+/g, '_')}.pdf`
+  return names[kind] || `${String(doc.name || 'document').replace(/[^\w.-]+/g, '_')}_${loadId}_${stamp}.pdf`
 }
 
-function partyForKind(kind, load) {
-  if (kind === 'invoice' || kind === 'rate-confirmation') {
-    const details = customerDetails(load)
-    return {
-      ...details,
-      name: load.customer || details.name,
-      phone: details.contactPhone || details.primaryPhone || details.phone,
-      fax: details.fax || details.contactFax,
-      contactName: details.contactName || details.contact || details.primaryContact,
-      docket: details.docketNumber || details.mcNumber || details.docket,
-      dot: details.dot,
+function drawDraftWatermark(doc) {
+  if (!doc._draftInvoice) return
+  doc.save()
+  doc.translate(306, 396)
+  doc.rotate(-32)
+  doc.fillColor('#c8c8c8').opacity(0.28)
+  doc.font('Helvetica-Bold').fontSize(96)
+  doc.text('DRAFT', -280, -36, { width: 560, align: 'center', lineBreak: false })
+  doc.restore()
+}
+
+function ensureSpace(doc, load, needed) {
+  if (doc.y + needed <= PAGE_BOTTOM) return
+  doc.addPage()
+  drawDraftWatermark(doc)
+  doc.y = 48
+  drawCompanyHeader(doc, load, true)
+}
+
+function drawCompanyHeader(doc, load, compact = false) {
+  const startY = doc.y
+  let textX = LEFT
+  if (HAS_LOGO) {
+    try {
+      doc.image(LOGO_PATH, LEFT, startY, { fit: [72, 36] })
+      textX = LEFT + 80
+    } catch {
+      textX = LEFT
     }
   }
-  const details = carrierDetails(load)
-  return {
-    ...details,
-    phone: details.phone || details.telephone || load.driverPhone,
-    fax: details.fax || details.driverFax,
-    contactName: details.contactName || details.contact || details.primaryContact || load.driver,
-    docket: details.docket || details.mcNumber || details.docketNumber,
-    dot: details.dot || details.dotNumber,
+  const branch = blank(load.branch)
+  const companyLine =
+    branch && branch.toLowerCase() !== 'shared'
+      ? `${branch} (${COMPANY.legalName})`
+      : COMPANY.legalName
+  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(11).text(companyLine, textX, startY, {
+    width: 320,
+  })
+  doc.font('Helvetica').fontSize(8).fillColor(MUTED)
+  doc.text(COMPANY.address1, textX, doc.y, { width: 320 })
+  doc.text(COMPANY.address2, textX, doc.y, { width: 320 })
+  if (!compact) {
+    doc.text(`Docket: ${COMPANY.docket}`, textX, doc.y, { width: 320 })
+    doc.text(`Phone: ${COMPANY.phone}`, textX, doc.y, { width: 320 })
   }
+  doc.fillColor(TEXT)
+  doc.moveDown(compact ? 0.3 : 0.55)
 }
 
-function chargesForKind(kind, load) {
-  if (kind === 'rate-confirmation' || kind === 'invoice') return incomeLines(load)
-  const carrierPay = expenseLines(load)
-  if (carrierPay.length) return carrierPay
-  return incomeLines(load)
+function drawTitle(doc, title) {
+  doc.font('Helvetica-Bold').fontSize(16).fillColor(TEXT).text(title, LEFT, doc.y, { width: WIDTH })
+  doc.moveDown(0.35)
 }
 
-function termsForKind(kind) {
-  if (kind === 'invoice') return [...INVOICE_TERMS, ...CARRIER_TERMS]
-  return CARRIER_TERMS
+function drawFactTable(doc, load, rows) {
+  const colW = [108, 162, 108, 162]
+  const x = [LEFT, LEFT + colW[0], LEFT + colW[0] + colW[1], LEFT + colW[0] + colW[1] + colW[2]]
+  rows.forEach((row) => {
+    ensureSpace(doc, load, 18)
+    const y = doc.y
+    const height = 16
+    doc.save()
+    doc.lineWidth(0.4).strokeColor(LINE)
+    colW.forEach((width, index) => {
+      if (index % 2 === 0) doc.rect(x[index], y, width, height).fillAndStroke('#ececec', LINE)
+      else doc.rect(x[index], y, width, height).stroke()
+    })
+    doc.restore()
+    row.forEach((cell, index) => {
+      doc
+        .font(index % 2 === 0 ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(8)
+        .fillColor(index % 2 === 0 ? MUTED : TEXT)
+        .text(blank(cell), x[index] + 4, y + 4, { width: colW[index] - 8, height: 10, ellipsis: true })
+    })
+    doc.y = y + height
+  })
+  doc.moveDown(0.45)
 }
 
-function dispatchNotes(load, kind) {
-  const temp = tempLine(load)
+function sectionBar(doc, load, title) {
+  ensureSpace(doc, load, 22)
+  const y = doc.y
+  doc.rect(LEFT, y, WIDTH, 16).fill(HEADER_GRAY)
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#ffffff').text(title, LEFT + 6, y + 4, {
+    width: WIDTH - 12,
+  })
+  doc.fillColor(TEXT)
+  doc.y = y + 18
+}
+
+function labeledRows(doc, load, rows) {
+  doc.font('Helvetica').fontSize(9)
+  rows.forEach(([label, value]) => {
+    const text = blank(value)
+    const height = Math.max(14, doc.heightOfString(text || ' ', { width: WIDTH - 130 }) + 4)
+    ensureSpace(doc, load, height)
+    const y = doc.y
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(MUTED).text(label, LEFT + 4, y + 2, { width: 118 })
+    doc.font('Helvetica').fontSize(9).fillColor(TEXT).text(text, LEFT + 126, y + 2, { width: WIDTH - 134 })
+    doc.y = y + height
+  })
+  doc.moveDown(0.25)
+}
+
+function drawCustomerBlock(doc, load) {
+  const details = customerDetails(load)
+  sectionBar(doc, load, 'Customer Information')
+  const name = blank(load.customer || details.name)
+  const lines = addressLines(details, name)
+  const mc = mcText(details.docketNumber || details.mcNumber || details.docket)
+  ensureSpace(doc, load, 48)
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT).text(lines[0] || '-', LEFT + 4, doc.y, {
+    width: WIDTH - 8,
+  })
+  if (mc) {
+    doc.font('Helvetica').fontSize(8).fillColor(MUTED).text(`MC Number: ${mc}`, LEFT + 4, doc.y, {
+      width: WIDTH - 8,
+    })
+  }
+  doc.font('Helvetica').fontSize(9).fillColor(TEXT)
+  lines.slice(1).forEach((line) => doc.text(line, LEFT + 4, doc.y, { width: WIDTH - 8 }))
+  doc.moveDown(0.2)
+  labeledRows(doc, load, [
+    ['MC Number', mc],
+    ['Primary Contact', details.contactName || details.contact || details.primaryContact],
+    ['Phone', details.contactPhone || details.primaryPhone || details.phone],
+    ['Fax', details.fax || details.contactFax],
+  ])
+}
+
+function drawCarrierBlock(doc, load) {
+  const details = carrierDetails(load)
+  sectionBar(doc, load, 'Carrier Information')
+  const lines = addressLines(details, `1 ${details.name || load.carrier || DUMMY_CARRIER.name}`)
+  ensureSpace(doc, load, 48)
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT).text(lines[0] || '1', LEFT + 4, doc.y, {
+    width: WIDTH - 8,
+  })
+  doc.font('Helvetica').fontSize(9).fillColor(TEXT)
+  lines.slice(1).forEach((line) => doc.text(line, LEFT + 4, doc.y, { width: WIDTH - 8 }))
+  if (details.phone) doc.text(details.phone, LEFT + 4, doc.y, { width: WIDTH - 8 })
+  doc.moveDown(0.15)
+  labeledRows(doc, load, [
+    ['MC Number', mcText(details.docket || details.mcNumber || details.docketNumber)],
+    ['Primary Contact', details.contactName || details.contact || details.primaryContact],
+    ['Phone', details.phone || details.telephone],
+    ['Fax', details.fax],
+    ['Driver', load.driver || details.drivers || 'Driver not set'],
+    ['Phone', details.driverPhone || load.driverPhone],
+    ['Email', details.email || details.driverEmail],
+    ['Fax', details.driverFax],
+  ])
+}
+
+function drawNotesAndRefs(doc, load) {
+  sectionBar(doc, load, 'Notes and References')
+  labeledRows(doc, load, [
+    ['Notes', load.publicNote || load.postingNotes || load.customerDetails?.publicNotes],
+    ['Reference(s)', referenceText(load)],
+  ])
+}
+
+function locationBlock(stop = {}, fallback = '') {
   return [
-    blank(load.publicNote),
-    blank(load.postingNotes),
-    blank(load.customerDetails?.publicNotes),
-    temp && !/\btemp\b/i.test(`${load.publicNote || ''} ${load.postingNotes || ''}`) ? temp.replace(/^\* |\s\*$/g, '') : '',
-    kind === 'invoice' ? `Email paperwork to ${COMPANY.accountingEmail}` : '',
+    stop.location || fallback,
+    stop.address,
+    [stop.city, [stop.state, stop.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+    stop.country && !['US', 'USA'].includes(String(stop.country)) ? stop.country : '',
   ]
     .filter(Boolean)
     .join('\n')
 }
 
-function drawCheckbox(doc, x, y, size = 7) {
-  doc.save()
-  doc.lineWidth(0.55).strokeColor(LINE).rect(x, y, size, size).stroke()
-  doc.restore()
+function contactBlock(stop = {}) {
+  return [stop.contactName, stop.contactPhone].filter(Boolean).join('\n')
 }
 
-function drawVerticalWord(doc, word, x, y, size = 8, gap = 8) {
-  setType(doc, 'header', size)
-  String(word || '')
-    .split('')
-    .forEach((letter, index) => {
-      doc.text(letter, x, y + index * gap, { width: 10, align: 'center', lineBreak: false })
-    })
-}
-
-function drawPageFrame(doc) {
-  withOpenMargins(doc, () => {
+function drawStopsTable(doc, load, { signatures = false } = {}) {
+  sectionBar(doc, load, 'Stops / Actions')
+  const cols = [28, 72, 108, 210, 122]
+  const headers = ['#', 'Action', 'Date/Time', 'Location', 'Contact']
+  const x = cols.reduce((acc, width, index) => {
+    acc.push(index === 0 ? LEFT : acc[index - 1] + cols[index - 1])
+    return acc
+  }, [])
+  const headerY = doc.y
+  doc.rect(LEFT, headerY, WIDTH, 16).fill('#dcdcdc')
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(MUTED)
+  headers.forEach((header, index) => {
+    doc.text(header, x[index] + 3, headerY + 4, { width: cols[index] - 6 })
+  })
+  doc.y = headerY + 16
+  const stops = loadStops(load)
+  if (!stops.length) {
     doc.save()
-    doc.lineWidth(0.9).strokeColor(LINE).rect(M, 14, CONTENT_W, PAGE.height - 36).stroke()
+    doc.lineWidth(0.4).strokeColor(LINE).rect(LEFT, doc.y, WIDTH, 18).stroke()
     doc.restore()
+    doc.y += 22
+    return
+  }
+  doc.font('Helvetica').fontSize(8)
+  stops.forEach((stop, index) => {
+    const location = locationBlock(stop, index === 0 ? load.picks : load.drops)
+    const contact = contactBlock(stop)
+    const values = [
+      String(index + 1),
+      actionLabel(stop.type),
+      formatDateTime(stop.scheduled || stop.appointment),
+      location,
+      contact,
+    ]
+    const height = Math.max(
+      22,
+      ...values.map((value, col) => doc.heightOfString(value || ' ', { width: cols[col] - 6 }) + 8),
+    )
+    ensureSpace(doc, load, height + (signatures ? 36 : 0))
+    const y = doc.y
+    if (index % 2 === 1) doc.rect(LEFT, y, WIDTH, height).fill(ROW_GRAY)
+    doc.save()
+    doc.lineWidth(0.4).strokeColor(LINE).rect(LEFT, y, WIDTH, height).stroke()
+    doc.restore()
+    doc.font('Helvetica').fontSize(8).fillColor(TEXT)
+    values.forEach((value, col) => {
+      doc.text(value || '', x[col] + 3, y + 4, { width: cols[col] - 6 })
+    })
+    doc.y = y + height
+    if (signatures) drawSignatureTrio(doc, load, 28)
   })
+  doc.moveDown(0.25)
 }
 
-function drawHeader(doc, ctx) {
-  const { load, kind } = ctx
-  const loadNo = blank(load.id)
-  const issued = formatStamp(load.updatedAt || load.postedAt || load.creationDate || load.createdAt)
-  const party = partyForKind(kind, load)
-  const dispatcher = (blank(load.usersRoles) || COMPANY.dispatchName).toUpperCase()
-  const rightW = RIGHT - 8 - 318
-
-  drawPageFrame(doc)
-
-  let loadX = M + 8
-  if (HAS_LOGO) {
-    try {
-      doc.image(LOGO_PATH, M + 6, 16, { fit: [48, 48] })
-      loadX = M + 58
-    } catch {
-      loadX = M + 8
-    }
-  }
-
-  const loadSize = loadNo.length > 22 ? 11 : loadNo.length > 16 ? 13 : 17
-  setType(doc, 'load', loadSize).text(loadNo, loadX, 22, {
-    width: 310 - loadX,
-    lineBreak: false,
+function drawPayItems(doc, load, lines) {
+  sectionBar(doc, load, 'Pay Items')
+  const cols = [168, 132, 60, 80, 100]
+  const headers = ['Description', 'Notes', 'Quantity', 'Rate', 'Amount']
+  const x = cols.reduce((acc, width, index) => {
+    acc.push(index === 0 ? LEFT : acc[index - 1] + cols[index - 1])
+    return acc
+  }, [])
+  const headerY = doc.y
+  doc.rect(LEFT, headerY, WIDTH, 16).fill('#dcdcdc')
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(MUTED)
+  headers.forEach((header, index) => {
+    doc.text(header, x[index] + 3, headerY + 4, {
+      width: cols[index] - 6,
+      align: index > 1 ? 'right' : 'left',
+    })
   })
-
-  const rightX = 318
-  setType(doc, 'header').text(`${loadNo} ${issued}`, rightX, 20, {
-    width: rightW,
-    align: 'right',
-    lineBreak: false,
+  doc.y = headerY + 16
+  let total = 0
+  const rows = lines.length ? lines : []
+  rows.forEach((line, index) => {
+    const amount = line.amount != null ? Number(line.amount) : lineTotal(line)
+    total += Number.isFinite(amount) ? amount : 0
+    ensureSpace(doc, load, 18)
+    const y = doc.y
+    if (index % 2 === 1) doc.rect(LEFT, y, WIDTH, 16).fill(ROW_GRAY)
+    doc.save()
+    doc.lineWidth(0.4).strokeColor(LINE).rect(LEFT, y, WIDTH, 16).stroke()
+    doc.restore()
+    const values = [
+      blank(line.description || line.company) || 'Flat Rate',
+      blank(line.notes),
+      String(line.quantity ?? 1),
+      moneyPlain(line.rate || 0),
+      moneyAmount(amount),
+    ]
+    doc.font('Helvetica').fontSize(8).fillColor(TEXT)
+    values.forEach((value, col) => {
+      doc.text(value, x[col] + 3, y + 4, {
+        width: cols[col] - 6,
+        align: col > 1 ? 'right' : 'left',
+      })
+    })
+    doc.y = y + 16
   })
-  doc.text(dispatcher, rightX, 34, {
-    width: rightW,
-    align: 'right',
-  })
-  doc.text(`${COMPANY.phone} (p)`, rightX, 46, { width: rightW, align: 'right' })
-  doc.text(COMPANY.dispatchEmail, rightX, 57, { width: rightW, align: 'right' })
-
-  const partyY = 74
-  setType(doc, 'header').text((party.name || '').toUpperCase(), M + 8, partyY, {
-    width: 280,
-  })
-  const phoneLine = [party.phone ? `${party.phone} (p)` : '', party.fax ? `Att: ${party.fax}` : '']
-    .filter(Boolean)
-    .join(' ')
-  doc.text(phoneLine, M + 8, partyY + 14, { width: 280 })
-
-  const idX = 468
-  const idW = RIGHT - 8 - idX
-  setType(doc, 'header').text(COMPANY.legalName, rightX, partyY, { width: 148 })
-  doc.text(COMPANY.address1, rightX, partyY + 14, { width: 148 })
-  doc.text(COMPANY.address2, rightX, partyY + 25, { width: 148 })
-  doc.text(COMPANY.address3, rightX, partyY + 36, { width: 148 })
-  if (mcText(party.docket)) {
-    doc.text(mcText(party.docket), idX, partyY, { width: idW, align: 'right', lineBreak: false })
-  }
-  const ref = blank(load.loadReference || load.reference || load.customerDetails?.customerReference)
-  const compact = blank(load.id).replace(/[^\w]/g, '').slice(-10)
-  const extra = ref || (compact && compact !== blank(load.id) ? compact : '')
-  if (extra) {
-    doc.text(extra, idX, partyY + 14, { width: idW, align: 'right', lineBreak: false })
-  }
-  if (blank(party.dot)) {
-    doc.text(blank(party.dot), idX, partyY + 25, { width: idW, align: 'right', lineBreak: false })
-  }
-  const partyContact = [party.contactName, party.phone].filter(Boolean).join(' ')
-  if (partyContact) {
-    doc.text(partyContact, idX, partyY + 36, { width: idW, align: 'right', lineBreak: false })
-  }
-  const brokerContact = [dispatcher, COMPANY.phone].filter(Boolean).join(' ')
-  doc.text(brokerContact, rightX, partyY + 48, { width: 250 })
-
-  const gridY = 138
-  doc.moveTo(M, gridY).lineTo(RIGHT, gridY).lineWidth(0.6).stroke()
-  setType(doc, 'label')
-  doc.text('Size & Type:', M + 8, gridY + 6, { width: 170 })
-  doc.text('Description:', 200, gridY + 6, { width: 220 })
-  doc.text('Miles:', 470, gridY + 6, { width: 90 })
-  doc.text('Pieces:', M + 8, gridY + 18, { width: 170 })
-  doc.text('Weight:', 200, gridY + 18, { width: 220 })
-
-  setType(doc, 'header')
-  doc.text(sizeAndType(load), M + 8, gridY + 34, { width: 180 })
-  doc.text(blank(load.commodity || load.commodityDescription).toUpperCase(), 200, gridY + 34, {
-    width: 250,
-  })
-  doc.text(milesNumber(load), 470, gridY + 34, { width: 90 })
-  setType(doc, 'body')
-  doc.text(blank(load.palletCount || load.quantity), M + 8, gridY + 48, { width: 170 })
-  doc.text(blank(load.weight), 200, gridY + 48, { width: 220 })
-
-  const temp = tempLine(load)
-  let nextY = gridY + 66
-  if (temp) {
-    setType(doc, 'header', 9).text(temp, M + 8, gridY + 64, { width: CONTENT_W - 16 })
-    nextY = gridY + 80
-  }
-  doc.moveTo(M, nextY).lineTo(RIGHT, nextY).lineWidth(0.6).stroke()
-  ctx.contentTop = nextY + 6
-  doc.y = ctx.contentTop
+  ensureSpace(doc, load, 20)
+  const y = doc.y
+  doc.rect(LEFT, y, WIDTH, 18).fill('#ececec')
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(TEXT)
+  doc.text('Total', LEFT + 4, y + 4, { width: 360 })
+  doc.text(moneyAmount(total), LEFT + WIDTH - 104, y + 4, { width: 100, align: 'right' })
+  doc.y = y + 24
+  return total
 }
 
-function drawFooter(doc, ctx) {
-  const { title } = ctx
-  const top = 648
-  withOpenMargins(doc, () => {
-  doc.save()
-  doc.lineWidth(0.7).strokeColor(LINE).moveTo(M, top).lineTo(RIGHT, top).stroke()
-  setType(doc, 'pro').text('PRO #', M + 8, top + 6, {
-    width: 40,
-    lineBreak: false,
+function drawSignatureTrio(doc, load, extraBottom = 34) {
+  ensureSpace(doc, load, extraBottom)
+  const y = doc.y + 14
+  const cols = [
+    { label: 'Print Name', x: LEFT, w: 176 },
+    { label: 'Signature', x: LEFT + 182, w: 176 },
+    { label: 'Date', x: LEFT + 364, w: 176 },
+  ]
+  cols.forEach((col) => {
+    doc.moveTo(col.x, y).lineTo(col.x + col.w, y).strokeColor('#666666').lineWidth(0.6).stroke()
+    doc.font('Helvetica').fontSize(8).fillColor(MUTED).text(col.label, col.x, y + 4, { width: col.w })
   })
-  setType(doc, 'proTitle').text(title, 78, top + 2, { width: 280, lineBreak: false })
-
-  drawVerticalWord(doc, 'FROM', M + 6, top + 22, 8, 8)
-  drawVerticalWord(doc, 'CARRIER', M + 16, top + 22, 8, 8)
-
-  const fx = 78
-  const fields = ['MC #', 'DOT', 'Driver', 'Truck #', 'Trailer #', 'Cell #']
-  fields.forEach((label, index) => {
-    const y = top + 22 + index * 12
-    setType(doc, 'footer').text(label, fx, y, { width: 52, lineBreak: false })
-    doc.moveTo(fx + 54, y + 9).lineTo(338, y + 9).lineWidth(0.5).strokeColor(LINE).stroke()
-  })
-
-  setType(doc, 'footer').text('Carrier Signature', 348, top + 78, {
-    width: 90,
-    lineBreak: false,
-  })
-  doc.moveTo(438, top + 88).lineTo(516, top + 88).stroke()
-  doc.text('Date', 524, top + 78, { width: 28, lineBreak: false })
-  doc.text('/   /', 552, top + 86, { width: 40, lineBreak: false })
-  setType(doc, 'footerSmall')
-  doc.text('M', 554, top + 96, { width: 12 })
-  doc.text('D', 574, top + 96, { width: 12 })
-
-  setType(doc, 'label')
-  doc.text('Send Carrier Bills to the Address Above', M + 8, top + 108, {
-    width: 280,
-    lineBreak: false,
-  })
-  doc.text('PRO # must appear on all Invoices', 348, top + 108, {
-    width: 240,
-    align: 'right',
-    lineBreak: false,
-  })
-  doc.restore()
-  })
+  doc.y = y + extraBottom - 14
 }
 
-function withOpenMargins(doc, fn) {
-  const saved = { ...doc.page.margins }
-  doc.page.margins = { top: 0, bottom: 0, left: 0, right: 0 }
-  fn()
-  doc.page.margins = saved
+function drawSignSection(doc, load, title) {
+  sectionBar(doc, load, title)
+  drawSignatureTrio(doc, load, 36)
+  doc.moveDown(0.2)
 }
 
-function writePageNumbers(doc) {
+function drawTerms(doc, load, lines) {
+  lines.forEach((line) => {
+    const height = doc.heightOfString(line, { width: WIDTH - 8, fontSize: 8 }) + 4
+    ensureSpace(doc, load, height)
+    doc.font(line.startsWith('***') ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(TEXT)
+    doc.text(line, LEFT + 2, doc.y, { width: WIDTH - 8 })
+  })
+  doc.moveDown(0.3)
+}
+
+function drawInvoicePayment(doc, load) {
+  ensureSpace(doc, load, 160)
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT).text('PAYMENTS TERMS- NET 21', LEFT, doc.y)
+  doc.moveDown(0.3)
+  doc.font('Helvetica-Bold').fontSize(10).text('NOTICE OF ASSIGNMENT', LEFT, doc.y)
+  doc.moveDown(0.15)
+  doc.font('Helvetica').fontSize(8)
+  doc.text('This account has been transfered and assigned.', LEFT, doc.y, { width: WIDTH })
+  doc.text('By law, payments must be made to:', LEFT, doc.y, { width: WIDTH })
+  doc.moveDown(0.3)
+  const y = doc.y
+  doc.font('Helvetica-Bold').fontSize(9).text('Internet Truckstop Payments, LLC', LEFT, y, { width: 250 })
+  doc.font('Helvetica').fontSize(8).text('888-777-5543', LEFT, y + 12, { width: 250 })
+  doc.font('Helvetica-Bold').text('Wire or ACH (Preferred)', LEFT, y + 28, { width: 250 })
+  doc.font('Helvetica')
+  doc.text('Account # 8670220797', LEFT, y + 40, { width: 250 })
+  doc.text('ABA # 071000039', LEFT, y + 52, { width: 250 })
+  doc.font('Helvetica-Bold').fontSize(9).text('Remit Checks to:', LEFT + 280, y, { width: 250 })
+  doc.font('Helvetica').fontSize(8)
+  doc.text('Bank of America Lockbox Services', LEFT + 280, y + 12, { width: 250 })
+  doc.text('540 W Madison, 4th Floor', LEFT + 280, y + 24, { width: 250 })
+  doc.text('Chicago IL 60661', LEFT + 280, y + 36, { width: 250 })
+  doc.font('Helvetica-Bold').text('Internet Truckstop Payments, LLC', LEFT + 280, y + 52, { width: 250 })
+  doc.font('Helvetica')
+  doc.text('PO Box 7410411', LEFT + 280, y + 64, { width: 250 })
+  doc.text('Chicago, IL 60674-0411', LEFT + 280, y + 76, { width: 250 })
+  doc.y = y + 96
+  doc.font('Helvetica').fontSize(8).text(
+    'Please send all remittance information to FactoringAR@truckstop.com',
+    LEFT,
+    doc.y,
+    { width: WIDTH },
+  )
+}
+
+function drawFooter(doc, load) {
   const range = doc.bufferedPageRange()
-  const count = range.count
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < range.count; i += 1) {
     doc.switchToPage(range.start + i)
-    setType(doc, 'page').text(`-- ${i + 1} of ${count} --`, M, 778, {
-      width: CONTENT_W,
+    const saved = { ...doc.page.margins }
+    doc.page.margins = { top: 0, bottom: 0, left: saved.left, right: saved.right }
+    doc.font('Helvetica').fontSize(8).fillColor('#555555')
+    doc.text(`Page ${i + 1} out of ${range.count} | Load #${blank(load.id)}`, LEFT, 14, {
+      width: WIDTH,
+      align: 'right',
+      lineBreak: false,
+    })
+    doc.text(`-- ${i + 1} of ${range.count} --`, LEFT, 776, {
+      width: WIDTH,
       align: 'center',
       lineBreak: false,
     })
+    doc.page.margins = saved
   }
 }
 
-function ensureSpace(doc, ctx, needed) {
-  if (doc.y + needed <= CONTENT_BOTTOM) return
-  if (ctx.inTerms) {
-    doc.font('Courier').fontSize(8.5).fillColor(TEXT).text(`(${ctx.title} Details on Next Page)`, M + 8, CONTENT_BOTTOM - 12, {
-      width: CONTENT_W - 16,
-      lineBreak: false,
-    })
+function startDocument(doc, load, title) {
+  doc.y = 40
+  drawDraftWatermark(doc)
+  drawCompanyHeader(doc, load)
+  drawTitle(doc, title)
+}
+
+function bolFacts(load) {
+  return [
+    ['Load #', blank(load.id), 'Date', formatDay(load.creationDate || load.postedAt || load.updatedAt || new Date())],
+    ['Weight', weightText(load), 'Commodity', load.commodity],
+    ['Distance', distanceText(load), '', ''],
+  ]
+}
+
+function fillBol(doc, load, { blind = false, stopSignatures = false } = {}) {
+  startDocument(doc, load, 'BILL OF LADING')
+  drawFactTable(doc, load, bolFacts(load))
+  if (!blind) drawCustomerBlock(doc, load)
+  drawNotesAndRefs(doc, load)
+  drawStopsTable(doc, load, { signatures: stopSignatures })
+  if (stopSignatures) {
+    drawSignSection(doc, load, 'Driver / Carrier')
+  } else {
+    drawSignSection(doc, load, 'Shipper / Consignor')
+    drawSignSection(doc, load, 'Driver / Carrier')
+    drawSignSection(doc, load, 'Receiver / Consignee')
   }
-  drawFooter(doc, ctx)
-  doc.addPage()
-  drawHeader(doc, ctx)
 }
 
-function sectionLabel(doc, label, x, y, width) {
-  setType(doc, 'section').text(label, x, y, { width: width - 14 })
-  drawCheckbox(doc, x + width - 10, y + 1, 8)
-  doc.moveTo(x, y + 12).lineTo(x + width, y + 12).lineWidth(0.55).strokeColor(LINE).stroke()
+function fillLoadConfirmation(doc, load) {
+  startDocument(doc, load, 'LOAD CONFIRMATION')
+  drawFactTable(doc, load, [
+    ['Load #', blank(load.id), 'Date', formatDay(load.creationDate || load.postedAt || load.updatedAt || new Date())],
+    ['Equipment', load.equipmentType || load.equipment, 'Equipment Length', load.equipmentLength],
+    ['Weight', weightText(load), 'Commodity', load.commodity],
+    ['Distance', distanceText(load), '', ''],
+  ])
+  drawCarrierBlock(doc, load)
+  drawNotesAndRefs(doc, load)
+  drawStopsTable(doc, load)
+  drawPayItems(doc, load, expenseLines(load))
+  drawTerms(doc, load, LOAD_CONFIRMATION_TERMS)
+  doc.font('Helvetica-Bold').fontSize(8).text(
+    '*** NO LOADS TO BE DOUBLE BROKERED ,IF DOUBLE BROKERED THE CARRIER WILL NOT BE PAID FOR THAT LOAD***',
+    LEFT,
+    doc.y,
+    { width: WIDTH },
+  )
+  doc.moveDown(0.6)
+  labeledRows(doc, load, [
+    ['Driver Name', load.driver || load.carrierDetails?.drivers],
+    ['Driver Cell Phone #', load.driverPhone || load.carrierDetails?.driverPhone || load.carrierDetails?.phone],
+  ])
+  drawSignatureTrio(doc, load, 40)
 }
 
-function drawChargeRow(doc, label, amount, y) {
-  setType(doc, 'body').text(label, M + 8, y, {
-    width: 196,
-    lineBreak: false,
-  })
-  drawCheckbox(doc, M + 210, y + 1, 7)
-  doc.text(moneyPlain(amount), M + 222, y, { width: 94, align: 'right', lineBreak: false })
+function fillRateConfirmation(doc, load) {
+  startDocument(doc, load, 'RATE CONFIRMATION')
+  drawFactTable(doc, load, [
+    ['Load #', blank(load.id), 'Date', formatDay(load.creationDate || load.postedAt || load.updatedAt || new Date())],
+    ['Reference', referenceText(load), 'Distance', distanceText(load)],
+  ])
+  drawCustomerBlock(doc, load)
+  drawPayItems(doc, load, incomeLines(load))
+  drawStopsTable(doc, load)
+  drawSignatureTrio(doc, load, 40)
 }
 
-function drawChargesAndNotes(doc, ctx, lines, notes) {
-  ensureSpace(doc, ctx, 72)
-  const y0 = doc.y + 2
-  const leftW = 318
-  const rightX = M + leftW + 10
-  const rightW = RIGHT - rightX - 6
-  sectionLabel(doc, 'CHARGES', M + 8, y0, leftW - 10)
-  sectionLabel(doc, 'DISPATCH NOTES', rightX, y0, rightW)
-
-  let y = y0 + 16
-  let total = 0
-  const rows = lines.length ? lines : [{ description: 'LINE HAUL RATE', rate: 0, quantity: 1 }]
-  rows.forEach((line) => {
-    ensureSpace(doc, ctx, 14)
-    if (doc.y > y) y = doc.y
-    const amount = line.amount != null ? Number(line.amount) : lineTotal(line)
-    total += Number.isFinite(amount) ? amount : 0
-    const label = (blank(line.description || line.company) || 'LINE HAUL RATE').toUpperCase()
-    drawChargeRow(doc, label, amount, y)
-    y += 12
-    doc.y = y
-  })
-  doc.rect(M + 176, y, 142, 16).lineWidth(0.8).strokeColor(LINE).stroke()
-  setType(doc, 'section').text('TOTAL RATE', M + 180, y + 4, {
-    width: 72,
-    lineBreak: false,
-  })
-  setType(doc, 'header').text(moneyPlain(total), M + 248, y + 4, { width: 64, align: 'right', lineBreak: false })
-  y += 22
-
-  const noteY = y0 + 16
-  setType(doc, 'bodyReg').text(notes || '', rightX, noteY, {
-    width: rightW,
-  })
-  const notesBottom = noteY + Math.max(40, doc.heightOfString(notes || ' ', { width: rightW, fontSize: 8.5 }))
-  doc.y = Math.max(y, notesBottom, y0 + 58)
-  doc.moveTo(M, doc.y).lineTo(RIGHT, doc.y).lineWidth(0.55).stroke()
-  doc.y += 6
+function fillInvoice(doc, load) {
+  startDocument(doc, load, 'INVOICE')
+  drawFactTable(doc, load, [
+    ['Invoice #', blank(load.id), 'Date', formatDay(load.sentToAccountingAt || load.postedAt || load.creationDate || new Date())],
+    ['Reference', referenceText(load), 'Weight', weightText(load)],
+    ['Distance', distanceText(load), '', ''],
+  ])
+  drawCustomerBlock(doc, load)
+  drawPayItems(doc, load, incomeLines(load))
+  drawStopsTable(doc, load)
+  drawInvoicePayment(doc, load)
 }
 
-function stopKindLabel(stop, pickupIndex, dropIndex) {
-  const type = String(stop.type || '').toLowerCase()
-  if (type === 'pickup') return `PICK ${pickupIndex}`
-  return `STOP ${dropIndex}`
-}
-
-function drawStops(doc, ctx) {
-  const stops = loadStops(ctx.load)
-  let pickupIndex = 0
-  let dropIndex = 0
-  stops.forEach((stop) => {
-    const type = String(stop.type || '').toLowerCase()
-    if (type === 'pickup') pickupIndex += 1
-    else dropIndex += 1
-    const label = stopKindLabel(stop, pickupIndex, dropIndex)
-    ensureSpace(doc, ctx, 56)
-    const y = doc.y
-    doc.save()
-    doc.lineWidth(0.6).strokeColor(LINE).rect(M, y, CONTENT_W, 50).stroke()
-    doc.restore()
-    doc.font('Courier-Bold').fontSize(10).fillColor(TEXT).text(label, M + 8, y + 4, { width: 90 })
-
-    const name = ctx.blind
-      ? cityStateZip(stop) || 'LOCATION WITHHELD'
-      : blank(stop.location || stop.company) || '—'
-    const street = ctx.blind ? '' : blank(stop.address)
-    const city = ctx.blind ? '' : cityStateZip(stop)
-    const appt = formatAppt(stop.scheduled || stop.appointment)
-    const ref = blank(stop.reference || ctx.load.loadReference || ctx.load.reference)
-    const contact = ctx.blind ? '' : [stop.contactName, stop.contactPhone].filter(Boolean).join(' ')
-
-    setType(doc, 'stop').text(name.toUpperCase(), M + 8, y + 16, { width: 310 })
-    setType(doc, 'body')
-    if (street) doc.text(street.toUpperCase(), M + 8, y + 28, { width: 310 })
-    if (city) doc.text(city.toUpperCase(), M + 8, y + 38, { width: 310 })
-    if (appt) doc.text(`Appointment ${appt}`, 360, y + 16, { width: 220 })
-    if (ref) doc.text(`Ref # ${ref}`, 360, y + 28, { width: 220 })
-    if (contact) doc.text(`Phone/Contact: ${contact}`, 360, y + 38, { width: 220 })
-    doc.y = y + 54
-  })
-}
-
-function drawTerms(doc, ctx, lines) {
-  ctx.inTerms = true
-  lines.forEach((line, index) => {
-    const emphasis = index === 0 || line.startsWith('***') || line.startsWith('******')
-    setType(doc, emphasis ? 'termsBold' : 'terms')
-    const height = doc.heightOfString(line, { width: CONTENT_W - 16 }) + 3
-    ensureSpace(doc, ctx, height)
-    doc.fillColor(TEXT).text(line, M + 8, doc.y, { width: CONTENT_W - 16 })
-  })
-  ctx.inTerms = false
-}
-
-function fillRateConSheet(doc, load, kind) {
-  const ctx = {
-    load,
-    kind,
-    title: documentTitle(kind),
-    blind: kind === 'blind-bol',
-    contentTop: 210,
+function writeDocument(kind) {
+  switch (kind) {
+    case 'invoice':
+      return fillInvoice
+    case 'load-confirmation':
+      return fillLoadConfirmation
+    case 'rate-confirmation':
+      return fillRateConfirmation
+    case 'blind-bol':
+      return (doc, load) => fillBol(doc, load, { blind: true, stopSignatures: false })
+    case 'bill-of-lading':
+      return (doc, load) => fillBol(doc, load, { blind: false, stopSignatures: false })
+    default:
+      return (doc, load) => fillBol(doc, load, { blind: false, stopSignatures: true })
   }
-  drawHeader(doc, ctx)
-  drawChargesAndNotes(doc, ctx, chargesForKind(kind, load), dispatchNotes(load, kind))
-  drawStops(doc, ctx)
-  doc.moveDown(0.2)
-  drawTerms(doc, ctx, termsForKind(kind))
-  drawFooter(doc, ctx)
 }
 
-export function buildLoadDocumentPdf(load, docMeta = {}) {
+export function buildLoadDocumentPdf(load, docMeta = {}, options = {}) {
   const kind = documentKindFromDoc(docMeta)
+  const fill = writeDocument(kind)
   return new Promise((resolve, reject) => {
     const pdf = new PDFDocument({
       size: 'LETTER',
-      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      margins: { top: 36, bottom: 50, left: 36, right: 36 },
       bufferPages: true,
       info: {
-        Title: docMeta.name || documentTitle(kind),
+        Title: docMeta.name || kind,
         Author: COMPANY.legalName,
         Subject: `Load ${load.id || ''}`,
       },
     })
+    pdf._draftInvoice = Boolean(kind === 'invoice' && options.draftInvoice)
     const chunks = []
     pdf.on('data', (chunk) => chunks.push(chunk))
     pdf.on('end', () => resolve(Buffer.concat(chunks)))
     pdf.on('error', reject)
-    fillRateConSheet(pdf, load, kind)
-    writePageNumbers(pdf)
+    fill(pdf, load)
+    drawFooter(pdf, load)
     pdf.end()
   })
 }
