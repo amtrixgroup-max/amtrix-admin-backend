@@ -11,6 +11,7 @@ import {
   parseListQuery,
   textSearch,
 } from '../utils/listQuery.js'
+import { canWriteCarrier } from '../utils/mcCheckAccess.js'
 
 const router = express.Router()
 router.use(authenticate)
@@ -150,6 +151,12 @@ router.post('/bulk', async (req, res, next) => {
     if (!items.length) {
       return res.status(400).json({ success: false, message: 'No carriers provided' })
     }
+    if (!(await canWriteCarrier(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can view carriers but do not have permission to change them.',
+      })
+    }
 
     const created = []
     const skipped = []
@@ -216,6 +223,12 @@ router.get('/:id/documents', async (req, res, next) => {
 
 router.post('/:id/documents', async (req, res, next) => {
   try {
+    if (!(await canWriteCarrier(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can view this carrier but do not have permission to change it.',
+      })
+    }
     const carrier = await findCarrier(req.params.id)
     if (!carrier) {
       return res.status(404).json({ success: false, message: 'Carrier not found' })
@@ -240,6 +253,12 @@ router.post('/:id/documents', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
+    if (!(await canWriteCarrier(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can view carriers but do not have permission to change them.',
+      })
+    }
     const payload = normalizeCarrierPayload(req.body || {}, req.user)
     if (!payload.name) {
       return res.status(400).json({ success: false, message: 'Carrier name is required' })
@@ -264,6 +283,12 @@ router.post('/', async (req, res, next) => {
 
 router.put('/:id', async (req, res, next) => {
   try {
+    if (!(await canWriteCarrier(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can view this carrier but do not have permission to change it.',
+      })
+    }
     const existing = await findCarrier(req.params.id)
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Carrier not found' })
@@ -282,6 +307,12 @@ router.put('/:id', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
+    if (!(await canWriteCarrier(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can view this carrier but do not have permission to change it.',
+      })
+    }
     const existing = await findCarrier(req.params.id)
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Carrier not found' })

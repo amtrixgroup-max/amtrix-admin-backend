@@ -71,6 +71,14 @@ export const canSendLoadToAccounting = async (user) => {
   return isNormalUserRole(meta.name)
 }
 
+export const canWriteCarrier = async (user) => {
+  if (!user) return false
+  if (isSuperAdminUser(user) || user.systemRole === 'ADMIN') return true
+  if (await isDeptAdminUser(user)) return true
+  if (await isComplianceUser(user)) return true
+  return false
+}
+
 export const isSuperAdminUser = (user) =>
   Boolean(user && (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN'))
 

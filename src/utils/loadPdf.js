@@ -367,12 +367,13 @@ function drawFactTable(doc, load, rows) {
 function sectionBar(doc, load, title) {
   ensureSpace(doc, load, 22)
   const y = doc.y
-  doc.rect(LEFT, y, WIDTH, 16).fill(INK)
-  doc.font(FONT_BOLD).fontSize(9).fillColor(PAPER).text(display(title), LEFT + 6, y + 4, {
-    width: WIDTH - 12,
+  doc.font(FONT_BOLD).fontSize(9).fillColor(INK).text(display(title), LEFT, y, {
+    width: WIDTH,
   })
+  const lineY = y + 12
+  doc.moveTo(LEFT, lineY).lineTo(LEFT + WIDTH, lineY).lineWidth(0.8).strokeColor(INK).stroke()
   doc.fillColor(TEXT)
-  doc.y = y + 18
+  doc.y = lineY + 6
 }
 
 function labeledRows(doc, load, rows) {
@@ -471,11 +472,12 @@ function drawStopsTable(doc, load, { signatures = false } = {}) {
     return acc
   }, [])
   const headerY = doc.y
-  doc.rect(LEFT, headerY, WIDTH, 16).fill(INK)
-  doc.font(FONT_BOLD).fontSize(8).fillColor(PAPER)
+  doc.moveTo(LEFT, headerY).lineTo(LEFT + WIDTH, headerY).lineWidth(0.8).strokeColor(INK).stroke()
+  doc.font(FONT_BOLD).fontSize(8).fillColor(INK)
   headers.forEach((header, index) => {
     doc.text(display(header), x[index] + 3, headerY + 4, { width: cols[index] - 6 })
   })
+  doc.moveTo(LEFT, headerY + 16).lineTo(LEFT + WIDTH, headerY + 16).lineWidth(0.8).strokeColor(INK).stroke()
   doc.y = headerY + 16
   const stops = loadStops(load)
   if (!stops.length) {
@@ -525,14 +527,15 @@ function drawPayItems(doc, load, lines) {
     return acc
   }, [])
   const headerY = doc.y
-  doc.rect(LEFT, headerY, WIDTH, 16).fill(INK)
-  doc.font(FONT_BOLD).fontSize(8).fillColor(PAPER)
+  doc.moveTo(LEFT, headerY).lineTo(LEFT + WIDTH, headerY).lineWidth(0.8).strokeColor(INK).stroke()
+  doc.font(FONT_BOLD).fontSize(8).fillColor(INK)
   headers.forEach((header, index) => {
     doc.text(display(header), x[index] + 3, headerY + 4, {
       width: cols[index] - 6,
       align: index > 1 ? 'right' : 'left',
     })
   })
+  doc.moveTo(LEFT, headerY + 16).lineTo(LEFT + WIDTH, headerY + 16).lineWidth(0.8).strokeColor(INK).stroke()
   doc.y = headerY + 16
   let total = 0
   const rows = lines.length ? lines : []
