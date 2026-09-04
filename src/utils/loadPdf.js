@@ -29,11 +29,15 @@ const DUMMY_CARRIER = {
 const LEFT = 36
 const WIDTH = 540
 const PAGE_BOTTOM = 720
-const HEADER_GRAY = '#5a5a5a'
-const ROW_GRAY = '#f3f3f3'
-const LINE = '#b7b7b7'
-const TEXT = '#111111'
-const MUTED = '#444444'
+const FONT = 'Courier'
+const FONT_BOLD = 'Courier-Bold'
+const INK = '#000000'
+const PAPER = '#ffffff'
+const HEADER_GRAY = INK
+const ROW_GRAY = PAPER
+const LINE = INK
+const TEXT = INK
+const MUTED = INK
 
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../assets')
 const LOGO_PATH = path.join(ASSETS_DIR, 'AP-Freight.png')
@@ -57,6 +61,13 @@ const LOAD_CONFIRMATION_TERMS = [
 function blank(value) {
   const text = String(value ?? '').trim()
   return text
+}
+
+function display(value) {
+  const text = blank(value)
+  if (!text) return ''
+  if (text.includes('@')) return text
+  return text.toUpperCase()
 }
 
 function moneyAmount(value) {
@@ -279,8 +290,8 @@ function drawDraftWatermark(doc) {
   doc.save()
   doc.translate(306, 396)
   doc.rotate(-32)
-  doc.fillColor('#c8c8c8').opacity(0.28)
-  doc.font('Helvetica-Bold').fontSize(96)
+  doc.fillColor(INK).opacity(0.18)
+  doc.font(FONT_BOLD).fontSize(96)
   doc.text('DRAFT', -280, -36, { width: 560, align: 'center', lineBreak: false })
   doc.restore()
 }
@@ -309,22 +320,22 @@ function drawCompanyHeader(doc, load, compact = false) {
     branch && branch.toLowerCase() !== 'shared'
       ? `${branch} (${COMPANY.legalName})`
       : COMPANY.legalName
-  doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(11).text(companyLine, textX, startY, {
+  doc.font(FONT_BOLD).fontSize(11).fillColor(TEXT).text(display(companyLine), textX, startY, {
     width: 320,
   })
-  doc.font('Helvetica').fontSize(8).fillColor(MUTED)
-  doc.text(COMPANY.address1, textX, doc.y, { width: 320 })
-  doc.text(COMPANY.address2, textX, doc.y, { width: 320 })
+  doc.font(FONT).fontSize(8).fillColor(MUTED)
+  doc.text(display(COMPANY.address1), textX, doc.y, { width: 320 })
+  doc.text(display(COMPANY.address2), textX, doc.y, { width: 320 })
   if (!compact) {
-    doc.text(`Docket: ${COMPANY.docket}`, textX, doc.y, { width: 320 })
-    doc.text(`Phone: ${COMPANY.phone}`, textX, doc.y, { width: 320 })
+    doc.text(display(`Docket: ${COMPANY.docket}`), textX, doc.y, { width: 320 })
+    doc.text(display(`Phone: ${COMPANY.phone}`), textX, doc.y, { width: 320 })
   }
   doc.fillColor(TEXT)
   doc.moveDown(compact ? 0.3 : 0.55)
 }
 
 function drawTitle(doc, title) {
-  doc.font('Helvetica-Bold').fontSize(16).fillColor(TEXT).text(title, LEFT, doc.y, { width: WIDTH })
+  doc.font(FONT_BOLD).fontSize(14).fillColor(TEXT).text(display(title), LEFT, doc.y, { width: WIDTH })
   doc.moveDown(0.35)
 }
 
@@ -336,18 +347,17 @@ function drawFactTable(doc, load, rows) {
     const y = doc.y
     const height = 16
     doc.save()
-    doc.lineWidth(0.4).strokeColor(LINE)
+    doc.lineWidth(0.8).strokeColor(LINE)
     colW.forEach((width, index) => {
-      if (index % 2 === 0) doc.rect(x[index], y, width, height).fillAndStroke('#ececec', LINE)
-      else doc.rect(x[index], y, width, height).stroke()
+      doc.rect(x[index], y, width, height).fillAndStroke(PAPER, LINE)
     })
     doc.restore()
     row.forEach((cell, index) => {
       doc
-        .font(index % 2 === 0 ? 'Helvetica-Bold' : 'Helvetica')
+        .font(index % 2 === 0 ? FONT_BOLD : FONT)
         .fontSize(8)
-        .fillColor(index % 2 === 0 ? MUTED : TEXT)
-        .text(blank(cell), x[index] + 4, y + 4, { width: colW[index] - 8, height: 10, ellipsis: true })
+        .fillColor(INK)
+        .text(display(cell), x[index] + 4, y + 4, { width: colW[index] - 8, height: 10, ellipsis: true })
     })
     doc.y = y + height
   })
@@ -357,8 +367,8 @@ function drawFactTable(doc, load, rows) {
 function sectionBar(doc, load, title) {
   ensureSpace(doc, load, 22)
   const y = doc.y
-  doc.rect(LEFT, y, WIDTH, 16).fill(HEADER_GRAY)
-  doc.font('Helvetica-Bold').fontSize(9).fillColor('#ffffff').text(title, LEFT + 6, y + 4, {
+  doc.rect(LEFT, y, WIDTH, 16).fill(INK)
+  doc.font(FONT_BOLD).fontSize(9).fillColor(PAPER).text(display(title), LEFT + 6, y + 4, {
     width: WIDTH - 12,
   })
   doc.fillColor(TEXT)
@@ -366,14 +376,14 @@ function sectionBar(doc, load, title) {
 }
 
 function labeledRows(doc, load, rows) {
-  doc.font('Helvetica').fontSize(9)
+  doc.font(FONT).fontSize(9)
   rows.forEach(([label, value]) => {
-    const text = blank(value)
+    const text = display(value)
     const height = Math.max(14, doc.heightOfString(text || ' ', { width: WIDTH - 130 }) + 4)
     ensureSpace(doc, load, height)
     const y = doc.y
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(MUTED).text(label, LEFT + 4, y + 2, { width: 118 })
-    doc.font('Helvetica').fontSize(9).fillColor(TEXT).text(text, LEFT + 126, y + 2, { width: WIDTH - 134 })
+    doc.font(FONT_BOLD).fontSize(8).fillColor(INK).text(display(label), LEFT + 4, y + 2, { width: 118 })
+    doc.font(FONT).fontSize(9).fillColor(INK).text(text, LEFT + 126, y + 2, { width: WIDTH - 134 })
     doc.y = y + height
   })
   doc.moveDown(0.25)
@@ -386,16 +396,16 @@ function drawCustomerBlock(doc, load) {
   const lines = addressLines(details, name)
   const mc = mcText(details.docketNumber || details.mcNumber || details.docket)
   ensureSpace(doc, load, 48)
-  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT).text(lines[0] || '-', LEFT + 4, doc.y, {
+  doc.font(FONT_BOLD).fontSize(10).fillColor(TEXT).text(display(lines[0] || '-'), LEFT + 4, doc.y, {
     width: WIDTH - 8,
   })
   if (mc) {
-    doc.font('Helvetica').fontSize(8).fillColor(MUTED).text(`MC Number: ${mc}`, LEFT + 4, doc.y, {
+    doc.font(FONT).fontSize(8).fillColor(INK).text(display(`MC Number: ${mc}`), LEFT + 4, doc.y, {
       width: WIDTH - 8,
     })
   }
-  doc.font('Helvetica').fontSize(9).fillColor(TEXT)
-  lines.slice(1).forEach((line) => doc.text(line, LEFT + 4, doc.y, { width: WIDTH - 8 }))
+  doc.font(FONT).fontSize(9).fillColor(TEXT)
+  lines.slice(1).forEach((line) => doc.text(display(line), LEFT + 4, doc.y, { width: WIDTH - 8 }))
   doc.moveDown(0.2)
   labeledRows(doc, load, [
     ['MC Number', mc],
@@ -410,12 +420,12 @@ function drawCarrierBlock(doc, load) {
   sectionBar(doc, load, 'Carrier Information')
   const lines = addressLines(details, `1 ${details.name || load.carrier || DUMMY_CARRIER.name}`)
   ensureSpace(doc, load, 48)
-  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT).text(lines[0] || '1', LEFT + 4, doc.y, {
+  doc.font(FONT_BOLD).fontSize(10).fillColor(TEXT).text(display(lines[0] || '1'), LEFT + 4, doc.y, {
     width: WIDTH - 8,
   })
-  doc.font('Helvetica').fontSize(9).fillColor(TEXT)
-  lines.slice(1).forEach((line) => doc.text(line, LEFT + 4, doc.y, { width: WIDTH - 8 }))
-  if (details.phone) doc.text(details.phone, LEFT + 4, doc.y, { width: WIDTH - 8 })
+  doc.font(FONT).fontSize(9).fillColor(TEXT)
+  lines.slice(1).forEach((line) => doc.text(display(line), LEFT + 4, doc.y, { width: WIDTH - 8 }))
+  if (details.phone) doc.text(display(details.phone), LEFT + 4, doc.y, { width: WIDTH - 8 })
   doc.moveDown(0.15)
   labeledRows(doc, load, [
     ['MC Number', mcText(details.docket || details.mcNumber || details.docketNumber)],
@@ -461,21 +471,21 @@ function drawStopsTable(doc, load, { signatures = false } = {}) {
     return acc
   }, [])
   const headerY = doc.y
-  doc.rect(LEFT, headerY, WIDTH, 16).fill('#dcdcdc')
-  doc.font('Helvetica-Bold').fontSize(8).fillColor(MUTED)
+  doc.rect(LEFT, headerY, WIDTH, 16).fill(INK)
+  doc.font(FONT_BOLD).fontSize(8).fillColor(PAPER)
   headers.forEach((header, index) => {
-    doc.text(header, x[index] + 3, headerY + 4, { width: cols[index] - 6 })
+    doc.text(display(header), x[index] + 3, headerY + 4, { width: cols[index] - 6 })
   })
   doc.y = headerY + 16
   const stops = loadStops(load)
   if (!stops.length) {
     doc.save()
-    doc.lineWidth(0.4).strokeColor(LINE).rect(LEFT, doc.y, WIDTH, 18).stroke()
+    doc.lineWidth(0.8).strokeColor(LINE).rect(LEFT, doc.y, WIDTH, 18).stroke()
     doc.restore()
     doc.y += 22
     return
   }
-  doc.font('Helvetica').fontSize(8)
+  doc.font(FONT).fontSize(8)
   stops.forEach((stop, index) => {
     const location = locationBlock(stop, index === 0 ? load.picks : load.drops)
     const contact = contactBlock(stop)
@@ -494,11 +504,11 @@ function drawStopsTable(doc, load, { signatures = false } = {}) {
     const y = doc.y
     if (index % 2 === 1) doc.rect(LEFT, y, WIDTH, height).fill(ROW_GRAY)
     doc.save()
-    doc.lineWidth(0.4).strokeColor(LINE).rect(LEFT, y, WIDTH, height).stroke()
+    doc.lineWidth(0.8).strokeColor(LINE).rect(LEFT, y, WIDTH, height).stroke()
     doc.restore()
-    doc.font('Helvetica').fontSize(8).fillColor(TEXT)
+    doc.font(FONT).fontSize(8).fillColor(TEXT)
     values.forEach((value, col) => {
-      doc.text(value || '', x[col] + 3, y + 4, { width: cols[col] - 6 })
+      doc.text(display(value) || '', x[col] + 3, y + 4, { width: cols[col] - 6 })
     })
     doc.y = y + height
     if (signatures) drawSignatureTrio(doc, load, 28)
@@ -515,10 +525,10 @@ function drawPayItems(doc, load, lines) {
     return acc
   }, [])
   const headerY = doc.y
-  doc.rect(LEFT, headerY, WIDTH, 16).fill('#dcdcdc')
-  doc.font('Helvetica-Bold').fontSize(8).fillColor(MUTED)
+  doc.rect(LEFT, headerY, WIDTH, 16).fill(INK)
+  doc.font(FONT_BOLD).fontSize(8).fillColor(PAPER)
   headers.forEach((header, index) => {
-    doc.text(header, x[index] + 3, headerY + 4, {
+    doc.text(display(header), x[index] + 3, headerY + 4, {
       width: cols[index] - 6,
       align: index > 1 ? 'right' : 'left',
     })
@@ -533,16 +543,16 @@ function drawPayItems(doc, load, lines) {
     const y = doc.y
     if (index % 2 === 1) doc.rect(LEFT, y, WIDTH, 16).fill(ROW_GRAY)
     doc.save()
-    doc.lineWidth(0.4).strokeColor(LINE).rect(LEFT, y, WIDTH, 16).stroke()
+    doc.lineWidth(0.8).strokeColor(LINE).rect(LEFT, y, WIDTH, 16).stroke()
     doc.restore()
     const values = [
-      blank(line.description || line.company) || 'Flat Rate',
-      blank(line.notes),
+      display(blank(line.description || line.company) || 'Flat Rate'),
+      display(blank(line.notes)),
       String(line.quantity ?? 1),
       moneyPlain(line.rate || 0),
       moneyAmount(amount),
     ]
-    doc.font('Helvetica').fontSize(8).fillColor(TEXT)
+    doc.font(FONT).fontSize(8).fillColor(TEXT)
     values.forEach((value, col) => {
       doc.text(value, x[col] + 3, y + 4, {
         width: cols[col] - 6,
@@ -553,9 +563,9 @@ function drawPayItems(doc, load, lines) {
   })
   ensureSpace(doc, load, 20)
   const y = doc.y
-  doc.rect(LEFT, y, WIDTH, 18).fill('#ececec')
-  doc.font('Helvetica-Bold').fontSize(9).fillColor(TEXT)
-  doc.text('Total', LEFT + 4, y + 4, { width: 360 })
+  doc.rect(LEFT, y, WIDTH, 18).fillAndStroke(PAPER, INK)
+  doc.font(FONT_BOLD).fontSize(9).fillColor(TEXT)
+  doc.text(display('Total'), LEFT + 4, y + 4, { width: 360 })
   doc.text(moneyAmount(total), LEFT + WIDTH - 104, y + 4, { width: 100, align: 'right' })
   doc.y = y + 24
   return total
@@ -570,8 +580,8 @@ function drawSignatureTrio(doc, load, extraBottom = 34) {
     { label: 'Date', x: LEFT + 364, w: 176 },
   ]
   cols.forEach((col) => {
-    doc.moveTo(col.x, y).lineTo(col.x + col.w, y).strokeColor('#666666').lineWidth(0.6).stroke()
-    doc.font('Helvetica').fontSize(8).fillColor(MUTED).text(col.label, col.x, y + 4, { width: col.w })
+    doc.moveTo(col.x, y).lineTo(col.x + col.w, y).strokeColor(INK).lineWidth(0.8).stroke()
+    doc.font(FONT).fontSize(8).fillColor(INK).text(display(col.label), col.x, y + 4, { width: col.w })
   })
   doc.y = y + extraBottom - 14
 }
@@ -584,42 +594,43 @@ function drawSignSection(doc, load, title) {
 
 function drawTerms(doc, load, lines) {
   lines.forEach((line) => {
-    const height = doc.heightOfString(line, { width: WIDTH - 8, fontSize: 8 }) + 4
+    const printed = display(line)
+    const height = doc.heightOfString(printed, { width: WIDTH - 8 }) + 4
     ensureSpace(doc, load, height)
-    doc.font(line.startsWith('***') ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(TEXT)
-    doc.text(line, LEFT + 2, doc.y, { width: WIDTH - 8 })
+    doc.font(line.startsWith('***') ? FONT_BOLD : FONT).fontSize(8).fillColor(INK)
+    doc.text(printed, LEFT + 2, doc.y, { width: WIDTH - 8 })
   })
   doc.moveDown(0.3)
 }
 
 function drawInvoicePayment(doc, load) {
   ensureSpace(doc, load, 160)
-  doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT).text('PAYMENTS TERMS- NET 21', LEFT, doc.y)
+  doc.font(FONT_BOLD).fontSize(10).fillColor(TEXT).text(display('PAYMENTS TERMS- NET 21'), LEFT, doc.y)
   doc.moveDown(0.3)
-  doc.font('Helvetica-Bold').fontSize(10).text('NOTICE OF ASSIGNMENT', LEFT, doc.y)
+  doc.font(FONT_BOLD).fontSize(10).text(display('NOTICE OF ASSIGNMENT'), LEFT, doc.y)
   doc.moveDown(0.15)
-  doc.font('Helvetica').fontSize(8)
-  doc.text('This account has been transfered and assigned.', LEFT, doc.y, { width: WIDTH })
-  doc.text('By law, payments must be made to:', LEFT, doc.y, { width: WIDTH })
+  doc.font(FONT).fontSize(8)
+  doc.text(display('This account has been transfered and assigned.'), LEFT, doc.y, { width: WIDTH })
+  doc.text(display('By law, payments must be made to:'), LEFT, doc.y, { width: WIDTH })
   doc.moveDown(0.3)
   const y = doc.y
-  doc.font('Helvetica-Bold').fontSize(9).text('Internet Truckstop Payments, LLC', LEFT, y, { width: 250 })
-  doc.font('Helvetica').fontSize(8).text('888-777-5543', LEFT, y + 12, { width: 250 })
-  doc.font('Helvetica-Bold').text('Wire or ACH (Preferred)', LEFT, y + 28, { width: 250 })
-  doc.font('Helvetica')
-  doc.text('Account # 8670220797', LEFT, y + 40, { width: 250 })
-  doc.text('ABA # 071000039', LEFT, y + 52, { width: 250 })
-  doc.font('Helvetica-Bold').fontSize(9).text('Remit Checks to:', LEFT + 280, y, { width: 250 })
-  doc.font('Helvetica').fontSize(8)
-  doc.text('Bank of America Lockbox Services', LEFT + 280, y + 12, { width: 250 })
-  doc.text('540 W Madison, 4th Floor', LEFT + 280, y + 24, { width: 250 })
-  doc.text('Chicago IL 60661', LEFT + 280, y + 36, { width: 250 })
-  doc.font('Helvetica-Bold').text('Internet Truckstop Payments, LLC', LEFT + 280, y + 52, { width: 250 })
-  doc.font('Helvetica')
-  doc.text('PO Box 7410411', LEFT + 280, y + 64, { width: 250 })
-  doc.text('Chicago, IL 60674-0411', LEFT + 280, y + 76, { width: 250 })
+  doc.font(FONT_BOLD).fontSize(9).text(display('Internet Truckstop Payments, LLC'), LEFT, y, { width: 250 })
+  doc.font(FONT).fontSize(8).text('888-777-5543', LEFT, y + 12, { width: 250 })
+  doc.font(FONT_BOLD).text(display('Wire or ACH (Preferred)'), LEFT, y + 28, { width: 250 })
+  doc.font(FONT)
+  doc.text(display('Account # 8670220797'), LEFT, y + 40, { width: 250 })
+  doc.text(display('ABA # 071000039'), LEFT, y + 52, { width: 250 })
+  doc.font(FONT_BOLD).fontSize(9).text(display('Remit Checks to:'), LEFT + 280, y, { width: 250 })
+  doc.font(FONT).fontSize(8)
+  doc.text(display('Bank of America Lockbox Services'), LEFT + 280, y + 12, { width: 250 })
+  doc.text(display('540 W Madison, 4th Floor'), LEFT + 280, y + 24, { width: 250 })
+  doc.text(display('Chicago IL 60661'), LEFT + 280, y + 36, { width: 250 })
+  doc.font(FONT_BOLD).text(display('Internet Truckstop Payments, LLC'), LEFT + 280, y + 52, { width: 250 })
+  doc.font(FONT)
+  doc.text(display('PO Box 7410411'), LEFT + 280, y + 64, { width: 250 })
+  doc.text(display('Chicago, IL 60674-0411'), LEFT + 280, y + 76, { width: 250 })
   doc.y = y + 96
-  doc.font('Helvetica').fontSize(8).text(
+  doc.font(FONT).fontSize(8).text(
     'Please send all remittance information to FactoringAR@truckstop.com',
     LEFT,
     doc.y,
@@ -633,8 +644,8 @@ function drawFooter(doc, load) {
     doc.switchToPage(range.start + i)
     const saved = { ...doc.page.margins }
     doc.page.margins = { top: 0, bottom: 0, left: saved.left, right: saved.right }
-    doc.font('Helvetica').fontSize(8).fillColor('#555555')
-    doc.text(`Page ${i + 1} out of ${range.count} | Load #${blank(load.id)}`, LEFT, 14, {
+    doc.font(FONT).fontSize(8).fillColor(INK)
+    doc.text(display(`Page ${i + 1} out of ${range.count} | Load #${blank(load.id)}`), LEFT, 14, {
       width: WIDTH,
       align: 'right',
       lineBreak: false,
@@ -691,8 +702,8 @@ function fillLoadConfirmation(doc, load) {
   drawStopsTable(doc, load)
   drawPayItems(doc, load, expenseLines(load))
   drawTerms(doc, load, LOAD_CONFIRMATION_TERMS)
-  doc.font('Helvetica-Bold').fontSize(8).text(
-    '*** NO LOADS TO BE DOUBLE BROKERED ,IF DOUBLE BROKERED THE CARRIER WILL NOT BE PAID FOR THAT LOAD***',
+  doc.font(FONT_BOLD).fontSize(8).text(
+    display('*** NO LOADS TO BE DOUBLE BROKERED ,IF DOUBLE BROKERED THE CARRIER WILL NOT BE PAID FOR THAT LOAD***'),
     LEFT,
     doc.y,
     { width: WIDTH },
