@@ -29,6 +29,8 @@ const invoiceSchema = new mongoose.Schema(
     pickAddress: String,
     dropAddress: String,
     loadStatus: String,
+    lastPaymentReminderAt: Date,
+    paymentReminderCount: { type: Number, default: 0 },
   },
   { timestamps: true },
 )

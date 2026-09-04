@@ -8,6 +8,7 @@ import { seedLoadData } from './seed/seedLoads.js'
 import { seedCarrierData } from './seed/seedCarriers.js'
 import { initSocket } from './socket.js'
 import { startPendingMcCheckReminderJob } from './utils/mcCheckReminders.js'
+import { startPaymentReminderJob } from './utils/paymentReminders.js'
 
 dotenv.config()
 
@@ -24,6 +25,7 @@ const startServer = async () => {
     const server = http.createServer(app)
     initSocket(server)
     startPendingMcCheckReminderJob()
+    startPaymentReminderJob()
 
     server.listen(PORT, () => {
       console.log(`Amtrix backend listening on http://localhost:${PORT}`)

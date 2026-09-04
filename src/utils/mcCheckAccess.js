@@ -41,6 +41,36 @@ export const canBuildLoad = async (user) => {
   return isNormalUserRole(meta.name)
 }
 
+export const isDeptAdminUser = async (user) => {
+  if (!user) return false
+  const meta = await getRoleMeta(user)
+  const name = normalizeRole(meta.name)
+  return name === 'DEPT_ADMIN' || name === 'DEPARTMENT_ADMIN'
+}
+
+export const isAccountsUser = async (user) => {
+  if (!user || isSuperAdminUser(user)) return false
+  const meta = await getRoleMeta(user)
+  const name = normalizeRole(meta.name)
+  const display = normalizeRole(meta.displayName)
+  return name === 'ACCOUNTS' || name === 'ACCOUNT' || display === 'ACCOUNTS' || display === 'ACCOUNT'
+}
+
+export const canUploadLoadDocuments = async (user) => {
+  if (!user) return false
+  if (await isDeptAdminUser(user)) return true
+  if (await isAccountsUser(user)) return true
+  const meta = await getRoleMeta(user)
+  return isNormalUserRole(meta.name)
+}
+
+export const canSendLoadToAccounting = async (user) => {
+  if (!user) return false
+  if (await isDeptAdminUser(user)) return true
+  const meta = await getRoleMeta(user)
+  return isNormalUserRole(meta.name)
+}
+
 export const isSuperAdminUser = (user) =>
   Boolean(user && (user.systemRole === 'SUPER_ADMIN' || user.role === 'SUPER_ADMIN'))
 

@@ -1,13 +1,62 @@
 const MS_PER_DAY = 24 * 60 * 60 * 1000
+export const PAYMENT_REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+function startOfUtcDay(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+export function parsePaymentTermDays(terms, fallback = 30) {
+  const text = String(terms || '').trim()
+  if (!text) return fallback
+  if (/due on receipt|upon receipt|cod|prepaid|due now/i.test(text)) return 0
+  const match = text.match(/(\d+)/)
+  if (!match) return fallback
+  const days = Number(match[1])
+  return Number.isFinite(days) ? days : fallback
+}
 
 export function daysPastDue(dueDate, now = new Date()) {
-  if (!dueDate) return 0
-  const due = new Date(dueDate)
-  if (Number.isNaN(due.getTime())) return 0
-
-  const startOfDue = Date.UTC(due.getFullYear(), due.getMonth(), due.getDate())
-  const startOfNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  const startOfDue = startOfUtcDay(dueDate)
+  const startOfNow = startOfUtcDay(now)
+  if (startOfDue == null || startOfNow == null) return 0
   return Math.max(0, Math.floor((startOfNow - startOfDue) / MS_PER_DAY))
+}
+
+export function daysUntilDue(dueDate, now = new Date()) {
+  const startOfDue = startOfUtcDay(dueDate)
+  const startOfNow = startOfUtcDay(now)
+  if (startOfDue == null || startOfNow == null) return null
+  return Math.floor((startOfDue - startOfNow) / MS_PER_DAY)
+}
+
+export function dashboardAgingRange(pastDueDays) {
+  const days = Math.max(0, Number(pastDueDays) || 0)
+  if (days <= 30) return 'd0to30'
+  if (days <= 60) return 'd31to60'
+  if (days <= 90) return 'd61to90'
+  return 'd90plus'
+}
+
+export function invoiceBalance(invoice) {
+  const invoiceTotal = Number(invoice?.invoiceTotal) || 0
+  const paid = Number(invoice?.paid) || 0
+  if (invoice?.balance != null && invoice.balance !== '') return Number(invoice.balance) || 0
+  return invoiceTotal - paid
+}
+
+export function isOpenInvoice(invoice) {
+  if (invoiceBalance(invoice) <= 0) return false
+  return String(invoice?.sentStatus || '') !== 'Factored'
+}
+
+export function shouldSendPaymentReminder(invoice, now = new Date()) {
+  if (!isOpenInvoice(invoice)) return false
+  if (daysPastDue(invoice?.dueDate, now) < 1) return false
+  const last = invoice?.lastPaymentReminderAt ? new Date(invoice.lastPaymentReminderAt).getTime() : 0
+  if (last && now.getTime() - last < PAYMENT_REMINDER_INTERVAL_MS) return false
+  return true
 }
 
 export function agingBuckets(balance, pastDueDays) {
@@ -39,6 +88,7 @@ export function serializeInvoice(doc) {
       ? Number(invoice.balance)
       : invoiceTotal - paid
   const pastDue = daysPastDue(invoice.dueDate)
+  const untilDue = daysUntilDue(invoice.dueDate)
 
   return {
     ...invoice,
@@ -47,6 +97,10 @@ export function serializeInvoice(doc) {
     paid,
     balance,
     daysPastDue: pastDue,
+    daysUntilDue: untilDue,
+    agingRange: dashboardAgingRange(pastDue),
+    paymentReminderCount: Number(invoice.paymentReminderCount) || 0,
+    lastPaymentReminderAt: invoice.lastPaymentReminderAt || null,
     ...agingBuckets(balance, pastDue),
   }
 }

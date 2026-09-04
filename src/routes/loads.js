@@ -54,7 +54,14 @@ import {
   parseTemplateUseQuantity,
   uniqueLoadId,
 } from '../utils/mapTemplateToLoad.js'
-import { canBuildLoad, getRoleMeta, isNormalUserRole, isSuperAdminUser } from '../utils/mcCheckAccess.js'
+import {
+  canBuildLoad,
+  canSendLoadToAccounting,
+  canUploadLoadDocuments,
+  getRoleMeta,
+  isNormalUserRole,
+  isSuperAdminUser,
+} from '../utils/mcCheckAccess.js'
 import fs from 'fs'
 import path from 'path'
 
@@ -1089,7 +1096,13 @@ router.get('/:id/documents', async (req, res, next) => {
   }
 })
 
-router.post('/:id/documents', (req, res, next) => {
+router.post('/:id/documents', async (req, res, next) => {
+  if (!(await canUploadLoadDocuments(req.user))) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only Accounts, Brokers, and Department Admins can upload load documents.',
+    })
+  }
   uploadLoadDocument.single('file')(req, res, async (error) => {
     if (error) {
       return res.status(400).json({ success: false, message: error.message || 'Upload failed' })
@@ -1341,6 +1354,12 @@ router.post('/:id/paperwork-ok', async (req, res, next) => {
 
 router.post('/:id/send-accounting', async (req, res, next) => {
   try {
+    if (!(await canSendLoadToAccounting(req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only Brokers and Department Admins can send a load to accounting.',
+      })
+    }
     const load = await findScopedLoad(req)
     if (!load) return res.status(404).json({ success: false, message: 'Load not found' })
     ensureLoadDocuments(load)

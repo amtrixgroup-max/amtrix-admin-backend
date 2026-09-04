@@ -1,7 +1,7 @@
 import Load from '../models/Load.js'
 import Invoice from '../models/Invoice.js'
 import CustomerApprovalRequest from '../models/CustomerApprovalRequest.js'
-import { serializeInvoice } from './invoiceAging.js'
+import { serializeInvoice, dashboardAgingRange } from './invoiceAging.js'
 import { readyToAddRequestIds } from './customerReadyToAdd.js'
 import { andFilter } from './listQuery.js'
 import { userScopeFilter } from './loadScope.js'
@@ -26,10 +26,8 @@ function emptyBuckets() {
 
 function addToBucket(buckets, daysPastDue, amount) {
   if (amount <= 0) return
-  if (daysPastDue <= 30) buckets.d0to30 += amount
-  else if (daysPastDue <= 60) buckets.d31to60 += amount
-  else if (daysPastDue <= 90) buckets.d61to90 += amount
-  else buckets.d90plus += amount
+  const key = dashboardAgingRange(daysPastDue)
+  buckets[key] += amount
 }
 
 function uniqueKey(invoice) {

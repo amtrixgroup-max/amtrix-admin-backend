@@ -1,4 +1,8 @@
 import Invoice from '../models/Invoice.js'
+import Customer from '../models/Customer.js'
+import Carrier from '../models/Carrier.js'
+import mongoose from 'mongoose'
+import { parsePaymentTermDays } from './invoiceAging.js'
 
 function dueDateFrom(start, days = 30) {
   const date = start ? new Date(start) : new Date()
@@ -7,7 +11,29 @@ function dueDateFrom(start, days = 30) {
   return date
 }
 
-async function upsertInvoice({ id, recordKind, type, tab, load, name, total }) {
+async function partyTerms(load, type) {
+  if (type === 'AP') {
+    const carrier = load?.carrier
+      ? await Carrier.findOne({ name: load.carrier }).select('paymentTerms email').lean()
+      : null
+    const terms = carrier?.paymentTerms || load?.carrierPaymentTerms || load?.paymentTerms || 'Net 30'
+    return { terms, days: parsePaymentTermDays(terms, 30) }
+  }
+  let customer = null
+  if (load?.customerId && mongoose.isValidObjectId(load.customerId)) {
+    customer = await Customer.findById(load.customerId).select('paymentTerms email').lean()
+  }
+  if (!customer && load?.customerId) {
+    customer = await Customer.findOne({ id: load.customerId }).select('paymentTerms email').lean()
+  }
+  if (!customer && load?.customer) {
+    customer = await Customer.findOne({ name: load.customer }).select('paymentTerms email').lean()
+  }
+  const terms = customer?.paymentTerms || load?.customerPaymentTerms || load?.paymentTerms || 'Net 30'
+  return { terms, days: parsePaymentTermDays(terms, 30) }
+}
+
+async function upsertInvoice({ id, recordKind, type, tab, load, name, total, terms }) {
   const amount = Number(total) || 0
   if (amount <= 0 || !name) return null
   const existing = await Invoice.findOne({
@@ -17,6 +43,7 @@ async function upsertInvoice({ id, recordKind, type, tab, load, name, total }) {
     ],
   })
   const invoiceDate = load.postedAt || load.sentToAccountingAt || new Date()
+  const termDays = parsePaymentTermDays(terms, 30)
   const payload = {
     recordKind,
     type,
@@ -27,8 +54,8 @@ async function upsertInvoice({ id, recordKind, type, tab, load, name, total }) {
     invoiceDate,
     loadNumber: load.id,
     reference: load.reference || load.loadReference || '',
-    paymentTerms: 'Net 30',
-    dueDate: dueDateFrom(invoiceDate, 30),
+    paymentTerms: terms || 'Net 30',
+    dueDate: dueDateFrom(invoiceDate, termDays),
     deliveryDate: load.dropDate || null,
     invoiceTotal: amount,
     paid: existing?.paid || 0,
@@ -50,6 +77,8 @@ async function upsertInvoice({ id, recordKind, type, tab, load, name, total }) {
 
 export async function upsertLoadBillingRecords(load) {
   const created = []
+  const customerTerms = await partyTerms(load, 'AR')
+  const carrierTerms = await partyTerms(load, 'AP')
   const ar = await upsertInvoice({
     id: `INV-AR-${load.id}`,
     recordKind: 'ar-ap',
@@ -57,6 +86,7 @@ export async function upsertLoadBillingRecords(load) {
     load,
     name: load.customer,
     total: load.income,
+    terms: customerTerms.terms,
   })
   if (ar) created.push(ar)
   const ap = await upsertInvoice({
@@ -66,6 +96,7 @@ export async function upsertLoadBillingRecords(load) {
     load,
     name: load.carrier,
     total: load.expenses,
+    terms: carrierTerms.terms,
   })
   if (ap) created.push(ap)
   const invoice = await upsertInvoice({
@@ -76,6 +107,7 @@ export async function upsertLoadBillingRecords(load) {
     load,
     name: load.customer,
     total: load.income,
+    terms: customerTerms.terms,
   })
   if (invoice) created.push(invoice)
   const bill = await upsertInvoice({
@@ -86,6 +118,7 @@ export async function upsertLoadBillingRecords(load) {
     load,
     name: load.carrier,
     total: load.expenses,
+    terms: carrierTerms.terms,
   })
   if (bill) created.push(bill)
   return created
